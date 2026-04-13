@@ -67,7 +67,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	for i, r := range results {
 		name := ""
-		for _, k := range []string{"key", "filename", "name", "id"} {
+		for _, k := range []string{"key", "file_name", "filename", "name", "id"} {
 			if v, ok := r[k].(string); ok && v != "" {
 				name = v
 				break
@@ -75,7 +75,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		}
 
 		score := ""
-		for _, k := range []string{"score", "similarity", "relevance"} {
+		for _, k := range []string{"score", "similarity", "relevance", "distance"} {
 			if v, ok := r[k].(float64); ok {
 				score = fmt.Sprintf("%d%%", int(v*100))
 				break
@@ -83,7 +83,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		}
 
 		snippet := ""
-		for _, k := range []string{"snippet", "excerpt", "content"} {
+		for _, k := range []string{"text", "snippet", "excerpt", "content"} {
 			if v, ok := r[k].(string); ok && v != "" {
 				snippet = v
 				break

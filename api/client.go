@@ -127,10 +127,12 @@ func (c *Client) Search(query, namespace string, limit int) (map[string]any, err
 // Context recupera contexto GraphRAG para uma pergunta.
 func (c *Client) Context(question, namespace string) (map[string]any, error) {
 	payload := map[string]any{
-		"query":     question,
-		"namespace": namespace,
+		"question":  question,
 	}
-	return c.do(http.MethodPost, fmt.Sprintf("/api/v1/%s/documents/search", c.OrgSlug), payload)
+	if namespace != "" {
+		payload["namespace"] = namespace
+	}
+	return c.do(http.MethodPost, fmt.Sprintf("/api/v1/%s/context", c.OrgSlug), payload)
 }
 
 // ListDocuments lista documentos de um namespace.

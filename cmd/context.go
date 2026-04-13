@@ -55,42 +55,44 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return output.JSON(cmd.OutOrStdout(), result)
 	}
 
-	// extract results
-	results := extractResults(result)
+	// Engine /context returns: { formatted_context, sources, stats }
+	formattedContext, _ := result["formatted_context"].(string)
+	rawSources, _ := result["sources"].([]any)
 
-	if len(results) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No relevant documents found.")
+	if formattedContext == "" && len(rawSources) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "  No relevant documents found.")
 		return nil
 	}
 
-	if !quiet {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Found %d relevant results\n\n", len(results))
+	if !quiet && len(rawSources) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  Found %d relevant sources\n\n", len(rawSources))
 	}
 
-	// monta conteúdo markdown consolidado
-	var contentParts []string
-	var sources []string
-
-	for _, r := range results {
-		if content, ok := r["content"].(string); ok && content != "" {
-			contentParts = append(contentParts, content)
-		}
-		src := buildSourceEntry(r)
-		if src != "" {
-			sources = append(sources, src)
+	// Render formatted context as markdown
+	if formattedContext != "" {
+		if err := output.Markdown(cmd.OutOrStdout(), formattedContext, noColor); err != nil {
+			fmt.Fprintln(cmd.OutOrStdout(), formattedContext)
 		}
 	}
 
-	if len(contentParts) > 0 {
-		combined := strings.Join(contentParts, "\n\n---\n\n")
-		if err := output.Markdown(cmd.OutOrStdout(), combined, noColor); err != nil {
-			// fallback: print raw text
-			fmt.Fprintln(cmd.OutOrStdout(), combined)
+	// Show sources
+	if len(rawSources) > 0 && !quiet {
+		var sourceNames []string
+		for _, s := range rawSources {
+			src, _ := s.(map[string]any)
+			name, _ := src["filename"].(string)
+			relevance, _ := src["relevance"].(float64)
+			if name != "" {
+				if relevance > 0 {
+					sourceNames = append(sourceNames, fmt.Sprintf("%s (%.0f%%)", name, relevance*100))
+				} else {
+					sourceNames = append(sourceNames, name)
+				}
+			}
 		}
-	}
-
-	if len(sources) > 0 && !quiet {
-		fmt.Fprintf(cmd.OutOrStdout(), "\nSources: %s\n", strings.Join(sources, ", "))
+		if len(sourceNames) > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n  Sources: %s\n", strings.Join(sourceNames, ", "))
+		}
 	}
 
 	return nil
@@ -124,7 +126,7 @@ func toMapSlice(list []any) []map[string]any {
 // buildSourceEntry builds the string "file.md (95%)" from a result.
 func buildSourceEntry(r map[string]any) string {
 	name := ""
-	for _, k := range []string{"key", "filename", "name", "id"} {
+	for _, k := range []string{"key", "file_name", "filename", "name", "id"} {
 		if v, ok := r[k].(string); ok && v != "" {
 			name = v
 			break
@@ -135,7 +137,7 @@ func buildSourceEntry(r map[string]any) string {
 	}
 
 	score := ""
-	for _, k := range []string{"score", "similarity", "relevance"} {
+	for _, k := range []string{"score", "similarity", "relevance", "distance"} {
 		if v, ok := r[k].(float64); ok {
 			score = fmt.Sprintf("%d%%", int(v*100))
 			break
