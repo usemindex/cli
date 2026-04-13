@@ -48,22 +48,21 @@ func runAuth(cmd *cobra.Command, args []string) error {
 
 	cfg.APIKey = apiKey
 
-	// try to extract org slug from authenticated user
-	if orgs, ok := me["organizations"].([]any); ok && len(orgs) > 0 {
-		if org, ok := orgs[0].(map[string]any); ok {
-			if slug, ok := org["slug"].(string); ok && cfg.OrgSlug == "" {
-				cfg.OrgSlug = slug
-			}
+	// Extract org slug and email from response
+	email := ""
+	if user, ok := me["user"].(map[string]any); ok {
+		if e, ok := user["email"].(string); ok {
+			email = e
+		}
+	}
+	if org, ok := me["org"].(map[string]any); ok {
+		if slug, ok := org["slug"].(string); ok {
+			cfg.OrgSlug = slug
 		}
 	}
 
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("error saving configuration: %w", err)
-	}
-
-	email := ""
-	if e, ok := me["email"].(string); ok {
-		email = e
 	}
 
 	if !quiet {
