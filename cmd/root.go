@@ -18,8 +18,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "mindex",
-	Short: "Give your AI real memory",
+	Use:     "mindex",
+	Short:   "Give your AI real memory",
+	Version: Version,
 	Long: `Mindex CLI — Give your AI real memory from the terminal.
 
   Get started:
@@ -33,6 +34,7 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	rootCmd.Version = Version
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -45,12 +47,5 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Minimal output")
 
-	// flag --version / -v
-	rootCmd.Flags().BoolP("version", "v", false, "Print version and exit")
-	rootCmd.PreRun = func(cmd *cobra.Command, args []string) {
-		if v, _ := cmd.Flags().GetBool("version"); v {
-			fmt.Fprintf(cmd.OutOrStdout(), "mindex version %s\n", Version)
-			os.Exit(0)
-		}
-	}
+	rootCmd.SetVersionTemplate("mindex version {{.Version}}\n")
 }
