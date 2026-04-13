@@ -6,16 +6,16 @@ Give your AI real memory — from the terminal.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://github.com/usemindex/cli/releases/latest/download/mindex_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | sudo tar xz -C /usr/local/bin --include mindex
+curl -fsSL https://raw.githubusercontent.com/usemindex/cli/main/install.sh | sh
 
 # Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/usemindex/cli/releases/latest/download/mindex_windows_amd64.zip" -OutFile mindex.zip; Expand-Archive mindex.zip -DestinationPath .; Move-Item mindex.exe $env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\
+irm https://github.com/usemindex/cli/releases/latest/download/mindex_windows_amd64.zip -OutFile m.zip; Expand-Archive m.zip; mv m\mindex.exe $env:LOCALAPPDATA\Microsoft\WindowsApps\; rm m.zip,m -r
 
 # Go
 go install github.com/usemindex/cli@latest
 ```
 
-> All binaries available at [GitHub Releases](https://github.com/usemindex/cli/releases)
+> All binaries at [GitHub Releases](https://github.com/usemindex/cli/releases)
 
 ## Quick Start
 
