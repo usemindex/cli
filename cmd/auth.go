@@ -71,9 +71,33 @@ func runAuth(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Println("Authenticated successfully!")
 		}
+	}
+
+	// Auto-update any installed MCP configs with the new API key
+	updated := updateInstalledMCPs(apiKey)
+	if !quiet {
+		for _, name := range updated {
+			fmt.Printf("  ✓ Updated MCP config for %s\n", name)
+		}
 		fmt.Println()
 		fmt.Println("Next step: mindex context \"your question\"")
 	}
 
 	return nil
+}
+
+// updateInstalledMCPs finds all MCP configs that have mindex configured
+// and updates them with the new API key. Returns names of updated tools.
+func updateInstalledMCPs(apiKey string) []string {
+	var updated []string
+	for key, tool := range mcpTools {
+		path := tool.configPath()
+		if isMCPConfigured(path) {
+			if err := writeMCPConfig(path, apiKey); err == nil {
+				updated = append(updated, tool.name)
+				_ = key
+			}
+		}
+	}
+	return updated
 }
