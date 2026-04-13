@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -33,11 +37,56 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// updateMsg receives the update notice from the background check (if any).
+var updateMsg chan string
+
 func Execute() {
 	rootCmd.Version = Version
+
+	// Check for updates in background (non-blocking)
+	updateMsg = make(chan string, 1)
+	go checkForUpdateQuiet()
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+
+	// Show update notice at the end (if available)
+	select {
+	case msg := <-updateMsg:
+		if msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+	default:
+	}
+}
+
+func checkForUpdateQuiet() {
+	defer func() { recover() }()
+
+	if Version == "dev" {
+		return
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/usemindex/cli/releases/latest")
+	if err != nil || resp.StatusCode != 200 {
+		return
+	}
+	defer resp.Body.Close()
+
+	var release map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return
+	}
+
+	latest, _ := release["tag_name"].(string)
+	latest = strings.TrimPrefix(latest, "v")
+	current := strings.TrimPrefix(Version, "v")
+
+	if latest != "" && latest != current {
+		updateMsg <- fmt.Sprintf("\n  Update available: v%s → v%s\n  Run: mindex update\n", current, latest)
 	}
 }
 
