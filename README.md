@@ -1,8 +1,6 @@
 # Stop using naive RAG
 
-Most RAG systems lose relationships between documents. Mindex doesn't.
-
-See the difference:
+RAG loses relationships between documents. Mindex keeps them.
 
 ```bash
 mindex context "how does the payment flow work?" --compare
@@ -15,7 +13,9 @@ mindex context "how does the payment flow work?" --compare
 
   [payment-flow.md] (similarity: 71%)
   The payment system uses Stripe checkout sessions.
+
   (No mention of webhooks, billing state, or downstream effects)
+
 
   ┌─────────────────────────────────────────────────┐
   │  MINDEX GRAPHRAG (similarity + relationships)   │
@@ -37,28 +37,29 @@ mindex context "how does the payment flow work?" --compare
   Sources: payment-flow.md, billing-setup.md (via RELATES_TO), api-reference.md
 
   ─────────────────────────────────────────────────
-  RAG = similarity matching only
-  Mindex = similarity + knowledge graph + relationships
+  ❌ RAG = similarity only
+  ✅ Mindex = similarity + knowledge graph + relationships
 ```
-
-Mindex builds a memory layer using knowledge graphs, so your AI understands relationships between your documents — not just similarity.
 
 Works with Claude, Cursor, Windsurf and any MCP-compatible tool.
 
 ## Try it yourself
 
 ```bash
+# Install (macOS / Linux)
 curl -fsSL https://raw.githubusercontent.com/usemindex/cli/main/install.sh | sh
+
+# Authenticate
 mindex auth
+
+# See it in action
 mindex context "your question here" --compare
 ```
 
-## Install
+<details>
+<summary>Other install methods</summary>
 
 ```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/usemindex/cli/main/install.sh | sh
-
 # Windows (PowerShell)
 irm https://github.com/usemindex/cli/releases/latest/download/mindex_windows_amd64.zip -OutFile m.zip; Expand-Archive m.zip; mv m\mindex.exe $env:LOCALAPPDATA\Microsoft\WindowsApps\; rm m.zip,m -r
 
@@ -68,39 +69,24 @@ go install github.com/usemindex/cli@latest
 
 > All binaries at [GitHub Releases](https://github.com/usemindex/cli/releases)
 
+</details>
+
 ## Quick Start
 
 ```bash
-# 1. Authenticate
-mindex auth
-
-# 2. Get context from your knowledge base
+# Get context from your knowledge base
 mindex context "how does authentication work?"
 
-# 3. Connect to your AI tool
+# Connect to your AI tool
 mindex mcp install claude-code
 ```
 
 ## The `context` Command
 
-The core feature of Mindex — retrieve enriched context from your documents using semantic search and knowledge graph traversal (GraphRAG).
+The core feature — retrieve enriched context using semantic search and knowledge graph traversal (GraphRAG).
 
 ```bash
 mindex context "how does the payment flow work?"
-```
-
-```
-  Found 3 relevant sources
-
-  === SEMANTIC SEARCH ===
-  [payment-flow.md] (relevance: 0.92)
-  The payment system uses Stripe checkout sessions...
-
-  === KNOWLEDGE GRAPH ===
-  [billing-setup.md] (relevance: 0.85)
-  Webhook handling for subscription updates...
-
-  Sources: payment-flow.md (92%), billing-setup.md (85%), api-reference.md (78%)
 ```
 
 Pipe to other tools with `--json`:
@@ -109,17 +95,9 @@ Pipe to other tools with `--json`:
 mindex context "deployment steps" --json | jq '.formatted_context'
 ```
 
-## Read a Document
-
-```bash
-mindex get docs/guide.md
-mindex get guide.md -n docs
-mindex get guide.md --json
-```
-
 ## MCP Integration
 
-Connect Mindex to your AI coding tools with one command. After connecting, your AI assistant will automatically search your knowledge base when answering questions.
+Connect Mindex to your AI coding tools with one command:
 
 ```bash
 mindex mcp install claude-code      # Claude Code
@@ -128,13 +106,19 @@ mindex mcp install windsurf         # Windsurf
 mindex mcp install claude-desktop   # Claude Desktop
 ```
 
-Check which tools are configured:
+> `mindex auth` automatically updates MCP configs when you change your API key.
+
+## Upload
+
+Supports multiple formats and batch upload:
 
 ```bash
-mindex mcp status
+mindex upload README.md
+mindex upload *.pdf -n docs
+mindex upload src/ --recursive
 ```
 
-> **Note:** `mindex auth` automatically updates MCP configs when you change your API key.
+Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.json`, `.xml`
 
 ## Commands
 
@@ -154,34 +138,6 @@ mindex mcp status
 | `mindex config` | Show current configuration |
 | `mindex status` | Check API connectivity |
 | `mindex update` | Update CLI to the latest version |
-| `mindex --version` | Show current version |
-
-## Upload
-
-Supports multiple formats and batch upload:
-
-```bash
-mindex upload README.md
-mindex upload *.pdf -n docs
-mindex upload src/ --recursive
-```
-
-Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.json`, `.xml`
-
-## Self-Update
-
-The CLI checks for updates automatically and notifies you:
-
-```
-  Update available: v0.3.2 → v0.3.3
-  Run: mindex update
-```
-
-Or update manually:
-
-```bash
-mindex update
-```
 
 ## Flags
 
@@ -191,6 +147,10 @@ mindex update
 | `--namespace` / `-n` | Target namespace |
 | `--no-color` | Disable colored output |
 | `--quiet` / `-q` | Minimal output |
+
+---
+
+If this is useful, [give it a star](https://github.com/usemindex/cli) :star:
 
 ## Links
 
