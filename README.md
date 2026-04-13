@@ -1,6 +1,42 @@
 # Mindex CLI
 
-Give your AI real memory — from the terminal.
+Better context than RAG. See for yourself:
+
+```bash
+mindex context "how does the payment flow work?" --compare
+```
+
+```
+  ┌─────────────────────────────────────────────────┐
+  │  NAIVE RAG (vector similarity only)             │
+  └─────────────────────────────────────────────────┘
+
+  [payment-flow.md] (similarity: 71%)
+  The payment system uses Stripe checkout sessions to process...
+
+  ┌─────────────────────────────────────────────────┐
+  │  MINDEX GRAPHRAG (similarity + relationships)   │
+  └─────────────────────────────────────────────────┘
+
+  === SEMANTIC SEARCH ===
+  [payment-flow.md] (relevance: 92%)
+  Complete payment flow with Stripe checkout sessions...
+
+  === KNOWLEDGE GRAPH ===
+  [billing-setup.md] (relevance: 85%)
+  Webhook handling: checkout.session.completed updates subscription...
+
+  [api-reference.md] (relevance: 78%)
+  POST /billing/checkout creates Stripe session with org metadata...
+
+  Sources: payment-flow.md, billing-setup.md (via RELATES_TO), api-reference.md
+
+  ─────────────────────────────────────────────────
+  RAG = similarity matching only
+  Mindex = similarity + knowledge graph + relationships
+```
+
+Works with Claude, Cursor, Windsurf and any MCP-compatible tool.
 
 ## Install
 

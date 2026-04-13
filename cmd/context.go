@@ -10,6 +10,8 @@ import (
 	"github.com/usemindex/cli/output"
 )
 
+var compare bool
+
 var contextCmd = &cobra.Command{
 	Use:   "context <question>",
 	Short: "Retrieve context from the knowledge base via GraphRAG",
@@ -18,12 +20,14 @@ var contextCmd = &cobra.Command{
   Examples:
     mindex context "how to configure payments?"
     mindex context "where is the authentication code?" --namespace backend
-    mindex context "deploy process" --json`,
+    mindex context "deploy process" --json
+    mindex context "payment flow" --compare`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runContext,
 }
 
 func init() {
+	contextCmd.Flags().BoolVar(&compare, "compare", false, "Compare naive RAG vs Mindex GraphRAG side by side")
 	rootCmd.AddCommand(contextCmd)
 }
 
@@ -46,6 +50,10 @@ func runContext(cmd *cobra.Command, args []string) error {
 	client := api.New(cfg.APIURL, cfg.APIKey)
 	client.OrgSlug = cfg.OrgSlug
 
+	if compare {
+		return runCompare(cmd, client, question, ns)
+	}
+
 	result, err := client.Context(question, ns)
 	if err != nil {
 		return err
@@ -55,7 +63,6 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return output.JSON(cmd.OutOrStdout(), result)
 	}
 
-	// Engine /context returns: { formatted_context, sources, stats }
 	formattedContext, _ := result["formatted_context"].(string)
 	rawSources, _ := result["sources"].([]any)
 
@@ -68,14 +75,12 @@ func runContext(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Found %d relevant sources\n\n", len(rawSources))
 	}
 
-	// Render formatted context as markdown
 	if formattedContext != "" {
 		if err := output.Markdown(cmd.OutOrStdout(), formattedContext, noColor); err != nil {
 			fmt.Fprintln(cmd.OutOrStdout(), formattedContext)
 		}
 	}
 
-	// Show sources
 	if len(rawSources) > 0 && !quiet {
 		var sourceNames []string
 		for _, s := range rawSources {
@@ -98,7 +103,121 @@ func runContext(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// extractResults tries to find the results list regardless of the response format.
+func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) error {
+	w := cmd.OutOrStdout()
+
+	fmt.Fprintf(w, "  Comparing: \"%s\"\n\n", question)
+
+	// --- RAG (simple vector search) ---
+	fmt.Fprintln(w, "  ┌─────────────────────────────────────────────────┐")
+	fmt.Fprintln(w, "  │  NAIVE RAG (vector similarity only)             │")
+	fmt.Fprintln(w, "  └─────────────────────────────────────────────────┘")
+
+	ragResult, ragErr := client.Search(question, ns, 3)
+	if ragErr != nil {
+		fmt.Fprintf(w, "  Error: %s\n", ragErr)
+	} else {
+		items := extractResults(ragResult)
+		if items == nil {
+			if arr, ok := ragResult["results"].([]any); ok {
+				items = toMapSlice(arr)
+			}
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(w, "  No results.")
+		} else {
+			for _, r := range items {
+				name := ""
+				for _, k := range []string{"file_name", "filename", "key", "name"} {
+					if v, ok := r[k].(string); ok && v != "" {
+						name = v
+						break
+					}
+				}
+				text := ""
+				for _, k := range []string{"text", "content", "snippet"} {
+					if v, ok := r[k].(string); ok && v != "" {
+						text = v
+						break
+					}
+				}
+				score := 0.0
+				for _, k := range []string{"distance", "score", "similarity"} {
+					if v, ok := r[k].(float64); ok {
+						score = v
+						break
+					}
+				}
+				if text != "" {
+					if len(text) > 150 {
+						text = text[:150] + "..."
+					}
+					fmt.Fprintf(w, "\n  [%s] (similarity: %.0f%%)\n", name, score*100)
+					fmt.Fprintf(w, "  %s\n", text)
+				}
+			}
+		}
+	}
+
+	fmt.Fprintln(w, "")
+
+	// --- MINDEX (GraphRAG) ---
+	fmt.Fprintln(w, "  ┌─────────────────────────────────────────────────┐")
+	fmt.Fprintln(w, "  │  MINDEX GRAPHRAG (similarity + relationships)   │")
+	fmt.Fprintln(w, "  └─────────────────────────────────────────────────┘")
+
+	contextResult, contextErr := client.Context(question, ns)
+	if contextErr != nil {
+		fmt.Fprintf(w, "  Error: %s\n", contextErr)
+	} else {
+		formattedContext, _ := contextResult["formatted_context"].(string)
+		rawSources, _ := contextResult["sources"].([]any)
+
+		if formattedContext == "" {
+			fmt.Fprintln(w, "  No context found.")
+		} else {
+			// Truncate for compare view
+			lines := strings.Split(formattedContext, "\n")
+			shown := 0
+			for _, line := range lines {
+				if shown >= 15 {
+					fmt.Fprintln(w, "  ...")
+					break
+				}
+				fmt.Fprintf(w, "  %s\n", line)
+				shown++
+			}
+		}
+
+		if len(rawSources) > 0 {
+			var names []string
+			for _, s := range rawSources {
+				src, _ := s.(map[string]any)
+				name, _ := src["filename"].(string)
+				rel, _ := src["relationship"].(string)
+				if name != "" {
+					if rel != "" {
+						names = append(names, fmt.Sprintf("%s (via %s)", name, rel))
+					} else {
+						names = append(names, name)
+					}
+				}
+			}
+			if len(names) > 0 {
+				fmt.Fprintf(w, "\n  Sources: %s\n", strings.Join(names, ", "))
+			}
+		}
+	}
+
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  ─────────────────────────────────────────────────")
+	fmt.Fprintln(w, "  RAG = similarity matching only")
+	fmt.Fprintln(w, "  Mindex = similarity + knowledge graph + relationships")
+	fmt.Fprintln(w, "")
+
+	return nil
+}
+
 func extractResults(result map[string]any) []map[string]any {
 	keys := []string{"results", "documents", "data", "items"}
 	for _, k := range keys {
@@ -108,11 +227,9 @@ func extractResults(result map[string]any) []map[string]any {
 			}
 		}
 	}
-	// if the response is a direct array at the top level (unlikely, but defensive)
 	return nil
 }
 
-// toMapSlice converts []any to []map[string]any, ignoring elements that are not maps.
 func toMapSlice(list []any) []map[string]any {
 	out := make([]map[string]any, 0, len(list))
 	for _, item := range list {
@@ -123,7 +240,6 @@ func toMapSlice(list []any) []map[string]any {
 	return out
 }
 
-// buildSourceEntry builds the string "file.md (95%)" from a result.
 func buildSourceEntry(r map[string]any) string {
 	name := ""
 	for _, k := range []string{"key", "file_name", "filename", "name", "id"} {
