@@ -7,6 +7,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version é preenchida pelo main.go com o valor injetado pelo goreleaser.
+var Version = "dev"
+
 var (
 	jsonOutput bool
 	namespace  string
@@ -41,4 +44,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&namespace, "namespace", "n", "", "Target namespace")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Minimal output")
+
+	// flag --version / -v
+	rootCmd.Flags().BoolP("version", "v", false, "Print version and exit")
+	rootCmd.PreRun = func(cmd *cobra.Command, args []string) {
+		if v, _ := cmd.Flags().GetBool("version"); v {
+			fmt.Fprintf(cmd.OutOrStdout(), "mindex version %s\n", Version)
+			os.Exit(0)
+		}
+	}
 }
