@@ -39,26 +39,36 @@ mindex context "how does the payment flow work?"
 ```
 
 ```
-  Found 5 relevant results
+  Found 3 relevant sources
 
-  ## Payment Flow
+  === SEMANTIC SEARCH ===
+  [payment-flow.md] (relevance: 0.92)
   The payment system uses Stripe checkout sessions...
 
-  ## Webhook Handling
-  When a payment succeeds, the webhook updates...
+  === KNOWLEDGE GRAPH ===
+  [billing-setup.md] (relevance: 0.85)
+  Webhook handling for subscription updates...
 
-  Sources: payment-guide.md (95%), stripe-setup.md (87%)
+  Sources: payment-flow.md (92%), billing-setup.md (85%), api-reference.md (78%)
 ```
 
 Pipe to other tools with `--json`:
 
 ```bash
-mindex context "deployment steps" --json | jq '.results[].content'
+mindex context "deployment steps" --json | jq '.formatted_context'
+```
+
+## Read a Document
+
+```bash
+mindex get docs/guide.md
+mindex get guide.md -n docs
+mindex get guide.md --json
 ```
 
 ## MCP Integration
 
-Connect Mindex to your AI coding tools with one command:
+Connect Mindex to your AI coding tools with one command. After connecting, your AI assistant will automatically search your knowledge base when answering questions.
 
 ```bash
 mindex mcp install claude-code      # Claude Code
@@ -73,22 +83,27 @@ Check which tools are configured:
 mindex mcp status
 ```
 
+> **Note:** `mindex auth` automatically updates MCP configs when you change your API key.
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `mindex context <question>` | **Retrieve context from your knowledge base** |
-| `mindex search <query>` | Semantic search |
+| `mindex context <question>` | **Retrieve context from your knowledge base (GraphRAG)** |
+| `mindex search <query>` | Semantic search across documents |
+| `mindex get <key>` | Read the full content of a document |
 | `mindex upload <file>` | Upload documents (PDF, Word, Markdown, and more) |
-| `mindex list` | List documents |
+| `mindex list` | List documents in a namespace |
 | `mindex delete <doc>` | Delete a document |
 | `mindex namespaces` | List namespaces |
 | `mindex namespaces create <name>` | Create a namespace |
 | `mindex mcp install <tool>` | Configure MCP server in AI tools |
 | `mindex mcp status` | Check MCP configuration status |
-| `mindex auth` | Configure API key |
-| `mindex config` | Show configuration |
-| `mindex status` | Check connectivity |
+| `mindex auth` | Configure API key (auto-updates MCP configs) |
+| `mindex config` | Show current configuration |
+| `mindex status` | Check API connectivity |
+| `mindex update` | Update CLI to the latest version |
+| `mindex --version` | Show current version |
 
 ## Upload
 
@@ -102,13 +117,28 @@ mindex upload src/ --recursive
 
 Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.json`, `.xml`
 
+## Self-Update
+
+The CLI checks for updates automatically and notifies you:
+
+```
+  Update available: v0.3.2 → v0.3.3
+  Run: mindex update
+```
+
+Or update manually:
+
+```bash
+mindex update
+```
+
 ## Flags
 
 | Flag | Description |
 |------|-------------|
-| `--json` / `-j` | JSON output for scripts |
+| `--json` / `-j` | JSON output for scripts and piping |
 | `--namespace` / `-n` | Target namespace |
-| `--no-color` | Disable colors |
+| `--no-color` | Disable colored output |
 | `--quiet` / `-q` | Minimal output |
 
 ## Links
