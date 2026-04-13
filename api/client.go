@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -142,6 +143,20 @@ func (c *Client) ListDocuments(namespace string) (map[string]any, error) {
 		path += "?namespace=" + namespace
 	}
 	return c.do(http.MethodGet, path, nil)
+}
+
+// GetDocument retrieves the full content of a document by key.
+func (c *Client) GetDocument(key, namespace string) (map[string]any, error) {
+	encoded := key
+	if idx := strings.Index(key, "/"); idx >= 0 {
+		// key includes namespace prefix: "ns/file.md" → encode only filename
+		ns := key[:idx]
+		filename := key[idx+1:]
+		encoded = fmt.Sprintf("%s?namespace=%s", filename, ns)
+	} else if namespace != "" {
+		encoded = fmt.Sprintf("%s?namespace=%s", key, namespace)
+	}
+	return c.do(http.MethodGet, fmt.Sprintf("/api/v1/%s/documents/%s", c.OrgSlug, encoded), nil)
 }
 
 // DeleteDocument remove um documento pelo ID.
