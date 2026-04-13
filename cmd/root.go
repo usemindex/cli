@@ -42,6 +42,7 @@ var updateMsg chan string
 
 func Execute() {
 	rootCmd.Version = Version
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	// Check for updates in background (non-blocking)
 	updateMsg = make(chan string, 1)
