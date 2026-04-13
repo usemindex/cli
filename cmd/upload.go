@@ -12,7 +12,7 @@ import (
 	"github.com/usemindex/cli/config"
 )
 
-// extensões aceitas para upload
+// accepted file extensions for upload
 var allowedExtensions = map[string]bool{
 	".md":       true,
 	".txt":      true,
@@ -32,13 +32,13 @@ var uploadRecursive bool
 
 var uploadCmd = &cobra.Command{
 	Use:   "upload <files...>",
-	Short: "Faz upload de arquivos para a knowledge base",
-	Long: `Faz upload de um ou mais arquivos para a knowledge base.
-Suporta globs e, com --recursive, diretórios inteiros.
+	Short: "Upload files to the knowledge base",
+	Long: `Uploads one or more files to the knowledge base.
+Supports globs and, with --recursive, entire directories.
 
-  Extensões aceitas: .md .txt .markdown .pdf .docx .pptx .xlsx .html .htm .csv .json .xml
+  Accepted extensions: .md .txt .markdown .pdf .docx .pptx .xlsx .html .htm .csv .json .xml
 
-  Exemplos:
+  Examples:
     mindex upload doc.md
     mindex upload docs/*.md
     mindex upload ./docs --recursive
@@ -48,17 +48,17 @@ Suporta globs e, com --recursive, diretórios inteiros.
 }
 
 func init() {
-	uploadCmd.Flags().BoolVarP(&uploadRecursive, "recursive", "r", false, "Inclui subdiretórios recursivamente")
+	uploadCmd.Flags().BoolVarP(&uploadRecursive, "recursive", "r", false, "Include subdirectories recursively")
 	rootCmd.AddCommand(uploadCmd)
 }
 
 func runUpload(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	ns := namespace
@@ -69,14 +69,14 @@ func runUpload(cmd *cobra.Command, args []string) error {
 	client := api.New(cfg.APIURL, cfg.APIKey)
 	client.OrgSlug = cfg.OrgSlug
 
-	// resolve todos os arquivos a partir dos args (globs + diretórios)
+	// resolve all files from args (globs + directories)
 	files, err := resolveFiles(args, uploadRecursive)
 	if err != nil {
-		return fmt.Errorf("erro ao resolver arquivos: %w", err)
+		return fmt.Errorf("error resolving files: %w", err)
 	}
 
 	if len(files) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "Nenhum arquivo compatível encontrado.")
+		fmt.Fprintln(cmd.OutOrStdout(), "No compatible files found.")
 		return nil
 	}
 
@@ -100,28 +100,28 @@ func runUpload(cmd *cobra.Command, args []string) error {
 	}
 
 	if !quiet {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n%d arquivo(s) enviado(s), %d falha(s).\n", success, failed)
+		fmt.Fprintf(cmd.OutOrStdout(), "\n%d file(s) uploaded, %d failure(s).\n", success, failed)
 	}
 
 	if failed > 0 && success == 0 {
-		return fmt.Errorf("todos os uploads falharam")
+		return fmt.Errorf("all uploads failed")
 	}
 	return nil
 }
 
-// resolveFiles expande globs, diretórios (se recursive) e filtra por extensão.
+// resolveFiles expands globs, directories (if recursive) and filters by extension.
 func resolveFiles(patterns []string, recursive bool) ([]string, error) {
 	seen := map[string]bool{}
 	var result []string
 
 	for _, pattern := range patterns {
-		// tenta glob primeiro
+		// try glob first
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			return nil, err
 		}
 
-		// se não match de glob, trata como path literal
+		// if no glob match, treat as a literal path
 		if matches == nil {
 			matches = []string{pattern}
 		}
@@ -129,16 +129,16 @@ func resolveFiles(patterns []string, recursive bool) ([]string, error) {
 		for _, match := range matches {
 			info, err := os.Stat(match)
 			if err != nil {
-				// arquivo não existe — ignora silenciosamente
+				// file does not exist — skip silently
 				continue
 			}
 
 			if info.IsDir() {
 				if !recursive {
-					fmt.Fprintf(os.Stderr, "  Ignorando diretório '%s' (use --recursive para incluir)\n", match)
+					fmt.Fprintf(os.Stderr, "  Skipping directory '%s' (use --recursive to include)\n", match)
 					continue
 				}
-				// percorre o diretório recursivamente
+				// walk the directory recursively
 				err := filepath.WalkDir(match, func(path string, d fs.DirEntry, err error) error {
 					if err != nil {
 						return err
@@ -167,7 +167,7 @@ func resolveFiles(patterns []string, recursive bool) ([]string, error) {
 	return result, nil
 }
 
-// isAllowedExtension verifica se a extensão do arquivo é aceita.
+// isAllowedExtension checks whether the file extension is accepted.
 func isAllowedExtension(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return allowedExtensions[ext]

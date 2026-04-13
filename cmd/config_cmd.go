@@ -9,8 +9,8 @@ import (
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Exibe a configuração atual",
-	Long:  `Exibe as configurações salvas em ~/.mindex/config.json com a API key mascarada.`,
+	Short: "Show current configuration",
+	Long:  `Displays the settings saved in ~/.mindex/config.json with the API key masked.`,
 	RunE:  runConfig,
 }
 
@@ -21,29 +21,29 @@ func init() {
 func runConfig(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 
 	w := cmd.OutOrStdout()
 
-	apiKeyDisplay := "(não configurada)"
+	apiKeyDisplay := "(not set)"
 	if cfg.APIKey != "" {
 		apiKeyDisplay = maskAPIKey(cfg.APIKey)
 	}
 
 	apiURL := cfg.APIURL
 	if apiURL == "" {
-		apiURL = "(padrão)"
+		apiURL = "(default)"
 	}
 
 	orgSlug := cfg.OrgSlug
 	if orgSlug == "" {
-		orgSlug = "(não configurado)"
+		orgSlug = "(not set)"
 	}
 
 	defaultNS := cfg.DefaultNamespace
 	if defaultNS == "" {
-		defaultNS = "(não configurado)"
+		defaultNS = "(not set)"
 	}
 
 	fmt.Fprintf(w, "API Key:           %s\n", apiKeyDisplay)
@@ -55,7 +55,7 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// maskAPIKey mantém o prefixo e os últimos 4 caracteres visíveis.
+// maskAPIKey keeps the prefix and the last 4 characters visible.
 func maskAPIKey(key string) string {
 	if len(key) <= 8 {
 		return "****"

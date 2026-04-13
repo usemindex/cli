@@ -14,11 +14,11 @@ var searchLimit int
 
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
-	Short: "Busca documentos por query semântica",
-	Long: `Realiza busca semântica nos documentos da sua knowledge base.
+	Short: "Search documents by semantic query",
+	Long: `Performs semantic search on documents in your knowledge base.
 
-  Exemplos:
-    mindex search "autenticação JWT"
+  Examples:
+    mindex search "JWT authentication"
     mindex search "deploy" --limit 5
     mindex search "stripe" --namespace payments --json`,
 	Args: cobra.MinimumNArgs(1),
@@ -26,17 +26,17 @@ var searchCmd = &cobra.Command{
 }
 
 func init() {
-	searchCmd.Flags().IntVarP(&searchLimit, "limit", "l", 10, "Número máximo de resultados")
+	searchCmd.Flags().IntVarP(&searchLimit, "limit", "l", 10, "Maximum number of results")
 	rootCmd.AddCommand(searchCmd)
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	query := strings.Join(args, " ")
@@ -61,7 +61,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	results := extractResults(result)
 
 	if len(results) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "Nenhum resultado encontrado.")
+		fmt.Fprintln(cmd.OutOrStdout(), "No results found.")
 		return nil
 	}
 
@@ -89,7 +89,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 				break
 			}
 		}
-		// trunca o snippet para caber na tela
+		// truncate the snippet to fit on screen
 		if len(snippet) > 120 {
 			snippet = snippet[:120] + "..."
 		}

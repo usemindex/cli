@@ -11,10 +11,10 @@ import (
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "Lista documentos da knowledge base",
-	Long: `Lista todos os documentos do namespace selecionado.
+	Short: "List documents in the knowledge base",
+	Long: `Lists all documents in the selected namespace.
 
-  Exemplos:
+  Examples:
     mindex list
     mindex list --namespace backend
     mindex list --json`,
@@ -28,10 +28,10 @@ func init() {
 func runList(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	ns := namespace
@@ -54,7 +54,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	docs := extractResults(result)
 
 	if len(docs) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "Nenhum documento encontrado.")
+		fmt.Fprintln(cmd.OutOrStdout(), "No documents found.")
 		return nil
 	}
 
@@ -77,7 +77,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// stringField extrai o primeiro campo não-vazio de uma lista de chaves candidatas.
+// stringField extracts the first non-empty field from a list of candidate keys.
 func stringField(m map[string]any, keys ...string) string {
 	for _, k := range keys {
 		if v, ok := m[k].(string); ok && v != "" {
@@ -87,7 +87,7 @@ func stringField(m map[string]any, keys ...string) string {
 	return ""
 }
 
-// formatBytes converte bytes para uma string legível (KB, MB, GB).
+// formatBytes converts bytes to a human-readable string (KB, MB, GB).
 func formatBytes(b int64) string {
 	switch {
 	case b >= 1<<30:

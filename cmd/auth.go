@@ -13,8 +13,8 @@ import (
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
-	Short: "Configure sua API key",
-	Long:  `Valida e salva sua API key do Mindex em ~/.mindex/config.json.`,
+	Short: "Configure your API key",
+	Long:  `Validates and saves your Mindex API key to ~/.mindex/config.json.`,
 	RunE:  runAuth,
 }
 
@@ -25,30 +25,30 @@ func init() {
 func runAuth(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 
-	fmt.Print("Cole sua API key (sk-...): ")
+	fmt.Print("Paste your API key (sk-...): ")
 	reader := bufio.NewReader(os.Stdin)
 	apiKey, err := reader.ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("erro ao ler API key: %w", err)
+		return fmt.Errorf("error reading API key: %w", err)
 	}
 	apiKey = strings.TrimSpace(apiKey)
 
 	if apiKey == "" {
-		return fmt.Errorf("API key não pode ser vazia")
+		return fmt.Errorf("API key cannot be empty")
 	}
 
 	client := api.New(cfg.APIURL, apiKey)
 	me, err := client.GetMe()
 	if err != nil {
-		return fmt.Errorf("API key inválida: %w", err)
+		return fmt.Errorf("invalid API key: %w", err)
 	}
 
 	cfg.APIKey = apiKey
 
-	// tenta extrair org slug do usuário autenticado
+	// try to extract org slug from authenticated user
 	if orgs, ok := me["organizations"].([]any); ok && len(orgs) > 0 {
 		if org, ok := orgs[0].(map[string]any); ok {
 			if slug, ok := org["slug"].(string); ok && cfg.OrgSlug == "" {
@@ -58,7 +58,7 @@ func runAuth(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("erro ao salvar configuração: %w", err)
+		return fmt.Errorf("error saving configuration: %w", err)
 	}
 
 	email := ""
@@ -68,12 +68,12 @@ func runAuth(cmd *cobra.Command, args []string) error {
 
 	if !quiet {
 		if email != "" {
-			fmt.Printf("Autenticado como %s\n", email)
+			fmt.Printf("Authenticated as %s\n", email)
 		} else {
-			fmt.Println("Autenticado com sucesso!")
+			fmt.Println("Authenticated successfully!")
 		}
 		fmt.Println()
-		fmt.Println("Próximo passo: mindex context \"sua pergunta\"")
+		fmt.Println("Next step: mindex context \"your question\"")
 	}
 
 	return nil

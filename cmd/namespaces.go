@@ -11,10 +11,10 @@ import (
 
 var namespacesCmd = &cobra.Command{
 	Use:   "namespaces",
-	Short: "Gerencia namespaces da organização",
-	Long: `Lista ou cria namespaces na sua organização.
+	Short: "Manage organization namespaces",
+	Long: `Lists or creates namespaces in your organization.
 
-  Exemplos:
+  Examples:
     mindex namespaces
     mindex namespaces create backend
     mindex namespaces --json`,
@@ -23,7 +23,7 @@ var namespacesCmd = &cobra.Command{
 
 var namespacesCreateCmd = &cobra.Command{
 	Use:   "create <name>",
-	Short: "Cria um novo namespace",
+	Short: "Create a new namespace",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runCreateNamespace,
 }
@@ -36,10 +36,10 @@ func init() {
 func runListNamespaces(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	client := api.New(cfg.APIURL, cfg.APIKey)
@@ -57,7 +57,7 @@ func runListNamespaces(cmd *cobra.Command, args []string) error {
 	namespaces := extractResults(result)
 
 	if len(namespaces) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "Nenhum namespace encontrado.")
+		fmt.Fprintln(cmd.OutOrStdout(), "No namespaces found.")
 		return nil
 	}
 
@@ -83,10 +83,10 @@ func runListNamespaces(cmd *cobra.Command, args []string) error {
 func runCreateNamespace(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	name := args[0]
@@ -108,7 +108,7 @@ func runCreateNamespace(cmd *cobra.Command, args []string) error {
 		if slug == "" {
 			slug = name
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Namespace '%s' criado com sucesso.\n", slug)
+		fmt.Fprintf(cmd.OutOrStdout(), "Namespace '%s' created successfully.\n", slug)
 	}
 
 	return nil

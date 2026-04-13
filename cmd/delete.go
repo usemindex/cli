@@ -10,11 +10,11 @@ import (
 
 var deleteCmd = &cobra.Command{
 	Use:   "delete <doc>",
-	Short: "Remove um documento da knowledge base",
-	Long: `Remove um documento pelo seu ID/key.
+	Short: "Remove a document from the knowledge base",
+	Long: `Removes a document by its ID/key.
 
-  Exemplos:
-    mindex delete meu-documento.md
+  Examples:
+    mindex delete my-document.md
     mindex delete doc-id-123 --namespace backend
     mindex delete doc.md --quiet`,
 	Args: cobra.ExactArgs(1),
@@ -28,10 +28,10 @@ func init() {
 func runDelete(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	docID := args[0]
@@ -49,7 +49,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	if !quiet {
-		fmt.Fprintf(cmd.OutOrStdout(), "Documento '%s' removido com sucesso.\n", docID)
+		fmt.Fprintf(cmd.OutOrStdout(), "Document '%s' deleted successfully.\n", docID)
 	}
 
 	return nil

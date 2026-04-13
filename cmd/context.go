@@ -12,12 +12,12 @@ import (
 
 var contextCmd = &cobra.Command{
 	Use:   "context <question>",
-	Short: "Recupera contexto da knowledge base via GraphRAG",
-	Long: `Consulta sua knowledge base com GraphRAG e retorna contexto relevante.
+	Short: "Retrieve context from the knowledge base via GraphRAG",
+	Long: `Queries your knowledge base with GraphRAG and returns relevant context.
 
-  Exemplos:
-    mindex context "como configurar pagamentos?"
-    mindex context "onde fica o código de autenticação?" --namespace backend
+  Examples:
+    mindex context "how to configure payments?"
+    mindex context "where is the authentication code?" --namespace backend
     mindex context "deploy process" --json`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runContext,
@@ -30,10 +30,10 @@ func init() {
 func runContext(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	question := strings.Join(args, " ")
@@ -55,7 +55,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return output.JSON(cmd.OutOrStdout(), result)
 	}
 
-	// extrai resultados
+	// extract results
 	results := extractResults(result)
 
 	if len(results) == 0 {
@@ -84,7 +84,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	if len(contentParts) > 0 {
 		combined := strings.Join(contentParts, "\n\n---\n\n")
 		if err := output.Markdown(cmd.OutOrStdout(), combined, noColor); err != nil {
-			// fallback: imprime o texto bruto
+			// fallback: print raw text
 			fmt.Fprintln(cmd.OutOrStdout(), combined)
 		}
 	}
@@ -96,7 +96,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// extractResults tenta encontrar a lista de resultados independente do formato da resposta.
+// extractResults tries to find the results list regardless of the response format.
 func extractResults(result map[string]any) []map[string]any {
 	keys := []string{"results", "documents", "data", "items"}
 	for _, k := range keys {
@@ -106,11 +106,11 @@ func extractResults(result map[string]any) []map[string]any {
 			}
 		}
 	}
-	// se a resposta é um array direto no nível superior (pouco provável, mas defensivo)
+	// if the response is a direct array at the top level (unlikely, but defensive)
 	return nil
 }
 
-// toMapSlice converte []any para []map[string]any, ignorando elementos que não são mapas.
+// toMapSlice converts []any to []map[string]any, ignoring elements that are not maps.
 func toMapSlice(list []any) []map[string]any {
 	out := make([]map[string]any, 0, len(list))
 	for _, item := range list {
@@ -121,7 +121,7 @@ func toMapSlice(list []any) []map[string]any {
 	return out
 }
 
-// buildSourceEntry monta a string "arquivo.md (95%)" a partir de um resultado.
+// buildSourceEntry builds the string "file.md (95%)" from a result.
 func buildSourceEntry(r map[string]any) string {
 	name := ""
 	for _, k := range []string{"key", "filename", "name", "id"} {

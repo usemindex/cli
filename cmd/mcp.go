@@ -13,39 +13,39 @@ import (
 
 const mcpURL = "https://mcp.usemindex.dev"
 
-// mcpToolInfo descreve um AI tool suportado pelo comando mcp install.
+// mcpToolInfo describes an AI tool supported by the mcp install command.
 type mcpToolInfo struct {
-	nome        string
+	name        string
 	configPath  func() string
-	exibirCampo string // caminho exibido ao usuário
+	displayPath string // path displayed to the user
 }
 
-// mcpTools mapeia o identificador da ferramenta para suas informações.
+// mcpTools maps the tool identifier to its information.
 var mcpTools = map[string]*mcpToolInfo{
 	"claude-code": {
-		nome: "Claude Code",
+		name: "Claude Code",
 		configPath: func() string {
 			return ".mcp.json"
 		},
-		exibirCampo: ".mcp.json",
+		displayPath: ".mcp.json",
 	},
 	"cursor": {
-		nome: "Cursor",
+		name: "Cursor",
 		configPath: func() string {
 			return filepath.Join(".cursor", "mcp.json")
 		},
-		exibirCampo: ".cursor/mcp.json",
+		displayPath: ".cursor/mcp.json",
 	},
 	"windsurf": {
-		nome: "Windsurf",
+		name: "Windsurf",
 		configPath: func() string {
 			home, _ := os.UserHomeDir()
 			return filepath.Join(home, ".codeium", "windsurf", "mcp_config.json")
 		},
-		exibirCampo: "~/.codeium/windsurf/mcp_config.json",
+		displayPath: "~/.codeium/windsurf/mcp_config.json",
 	},
 	"claude-desktop": {
-		nome: "Claude Desktop",
+		name: "Claude Desktop",
 		configPath: func() string {
 			home, _ := os.UserHomeDir()
 			switch runtime.GOOS {
@@ -61,22 +61,22 @@ var mcpTools = map[string]*mcpToolInfo{
 				return filepath.Join(home, ".config", "Claude", "claude_desktop_config.json")
 			}
 		},
-		exibirCampo: "claude_desktop_config.json",
+		displayPath: "claude_desktop_config.json",
 	},
 }
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
-	Short: "Gerencia a integração MCP com ferramentas de IA",
-	Long: `Gerencia a integração do servidor MCP do Mindex com ferramentas de IA.
+	Short: "Manage MCP integration with AI tools",
+	Long: `Manages the Mindex MCP server integration with AI tools.
 
-  Ferramentas suportadas:
-    claude-code     .mcp.json no diretório atual
-    cursor          .cursor/mcp.json no diretório atual
+  Supported tools:
+    claude-code     .mcp.json in the current directory
+    cursor          .cursor/mcp.json in the current directory
     windsurf        ~/.codeium/windsurf/mcp_config.json
-    claude-desktop  arquivo de config do Claude Desktop
+    claude-desktop  Claude Desktop config file
 
-  Exemplos:
+  Examples:
     mindex mcp install claude-code
     mindex mcp install cursor
     mindex mcp status`,
@@ -87,12 +87,12 @@ var mcpCmd = &cobra.Command{
 
 var mcpInstallCmd = &cobra.Command{
 	Use:   "install <tool>",
-	Short: "Configura o servidor MCP do Mindex em uma ferramenta de IA",
-	Long: `Configura o servidor MCP do Mindex em uma ferramenta de IA.
+	Short: "Configure the Mindex MCP server in an AI tool",
+	Long: `Configures the Mindex MCP server in an AI tool.
 
-  Ferramentas suportadas: claude-code, cursor, windsurf, claude-desktop
+  Supported tools: claude-code, cursor, windsurf, claude-desktop
 
-  Exemplos:
+  Examples:
     mindex mcp install claude-code
     mindex mcp install cursor`,
 	Args: cobra.ExactArgs(1),
@@ -101,7 +101,7 @@ var mcpInstallCmd = &cobra.Command{
 
 var mcpStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Mostra quais ferramentas têm o Mindex MCP configurado",
+	Short: "Show which AI tools have the Mindex MCP configured",
 	RunE:  runMcpStatus,
 }
 
@@ -116,27 +116,27 @@ func runMcpInstall(cmd *cobra.Command, args []string) error {
 
 	tool, ok := mcpTools[toolKey]
 	if !ok {
-		return fmt.Errorf("ferramenta desconhecida '%s'. Suportadas: claude-code, cursor, windsurf, claude-desktop", toolKey)
+		return fmt.Errorf("unknown tool '%s'. Supported: claude-code, cursor, windsurf, claude-desktop", toolKey)
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("não autenticado. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("not authenticated. Run 'mindex auth' first.")
 	}
 
 	configPath := tool.configPath()
 
 	if err := writeMCPConfig(configPath, cfg.APIKey); err != nil {
-		return fmt.Errorf("erro ao escrever configuração: %w", err)
+		return fmt.Errorf("error writing configuration: %w", err)
 	}
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "  ✓ Mindex MCP configurado para %s\n", tool.nome)
-	fmt.Fprintf(w, "    Config: %s\n", tool.exibirCampo)
-	fmt.Fprintf(w, "    Reinicie %s para ativar.\n", tool.nome)
+	fmt.Fprintf(w, "  ✓ Mindex MCP configured for %s\n", tool.name)
+	fmt.Fprintf(w, "    Config: %s\n", tool.displayPath)
+	fmt.Fprintf(w, "    Restart %s to activate.\n", tool.name)
 
 	return nil
 }
@@ -144,7 +144,7 @@ func runMcpInstall(cmd *cobra.Command, args []string) error {
 func runMcpStatus(cmd *cobra.Command, args []string) error {
 	w := cmd.OutOrStdout()
 
-	// ordem de exibição
+	// display order
 	ordem := []string{"claude-code", "cursor", "windsurf", "claude-desktop"}
 
 	for _, key := range ordem {
@@ -153,37 +153,37 @@ func runMcpStatus(cmd *cobra.Command, args []string) error {
 		configurado := isMCPConfigured(configPath)
 
 		if configurado {
-			fmt.Fprintf(w, "  %-16s ✓ configurado (%s)\n", tool.nome+":", tool.exibirCampo)
+			fmt.Fprintf(w, "  %-16s ✓ configured (%s)\n", tool.name+":", tool.displayPath)
 		} else {
-			fmt.Fprintf(w, "  %-16s ✗ não configurado\n", tool.nome+":")
+			fmt.Fprintf(w, "  %-16s ✗ not configured\n", tool.name+":")
 		}
 	}
 
 	return nil
 }
 
-// writeMCPConfig lê o arquivo de configuração existente (se houver), adiciona/atualiza
-// a entrada "mindex" em "mcpServers" preservando todas as outras chaves, e salva.
+// writeMCPConfig reads the existing config file (if any), adds/updates
+// the "mindex" entry in "mcpServers" preserving all other keys, and saves.
 func writeMCPConfig(path, apiKey string) error {
-	// carrega configuração existente ou inicializa um mapa vazio
+	// load existing configuration or initialize an empty map
 	existing := map[string]any{}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("erro ao ler %s: %w", path, err)
+		return fmt.Errorf("error reading %s: %w", path, err)
 	}
 	if err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &existing); err != nil {
-			return fmt.Errorf("JSON inválido em %s: %w", path, err)
+			return fmt.Errorf("invalid JSON in %s: %w", path, err)
 		}
 	}
 
-	// garante que mcpServers existe
+	// ensure mcpServers exists
 	mcpServers, _ := existing["mcpServers"].(map[string]any)
 	if mcpServers == nil {
 		mcpServers = map[string]any{}
 	}
 
-	// adiciona/atualiza apenas a entrada "mindex"
+	// add/update only the "mindex" entry
 	mcpServers["mindex"] = map[string]any{
 		"type": "http",
 		"url":  mcpURL,
@@ -193,22 +193,22 @@ func writeMCPConfig(path, apiKey string) error {
 	}
 	existing["mcpServers"] = mcpServers
 
-	// cria diretórios intermediários se necessário
+	// create intermediate directories if needed
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("erro ao criar diretório %s: %w", dir, err)
+		return fmt.Errorf("error creating directory %s: %w", dir, err)
 	}
 
-	// serializa com indentação
+	// serialize with indentation
 	out, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
-		return fmt.Errorf("erro ao serializar configuração: %w", err)
+		return fmt.Errorf("error serializing configuration: %w", err)
 	}
 
 	return os.WriteFile(path, out, 0600)
 }
 
-// isMCPConfigured verifica se o arquivo existe e contém a entrada "mindex" em "mcpServers".
+// isMCPConfigured checks whether the file exists and contains the "mindex" entry in "mcpServers".
 func isMCPConfigured(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {

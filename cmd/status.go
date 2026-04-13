@@ -11,8 +11,8 @@ import (
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Verifica a conectividade com a API",
-	Long:  `Verifica se a API key está configurada corretamente e se a API está acessível.`,
+	Short: "Check API connectivity",
+	Long:  `Checks whether the API key is correctly configured and the API is reachable.`,
 	RunE:  runStatus,
 }
 
@@ -23,10 +23,10 @@ func init() {
 func runStatus(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("erro ao carregar configuração: %w", err)
+		return fmt.Errorf("error loading configuration: %w", err)
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key não configurada. Execute 'mindex auth' primeiro.")
+		return fmt.Errorf("API key not configured. Run 'mindex auth' first.")
 	}
 
 	client := api.New(cfg.APIURL, cfg.APIKey)
@@ -40,7 +40,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				"error":  err.Error(),
 			})
 		}
-		return fmt.Errorf("falha na conexão: %w", err)
+		return fmt.Errorf("connection failed: %w", err)
 	}
 
 	if jsonOutput {
