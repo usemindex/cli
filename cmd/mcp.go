@@ -25,9 +25,10 @@ var mcpTools = map[string]*mcpToolInfo{
 	"claude-code": {
 		name: "Claude Code",
 		configPath: func() string {
-			return ".mcp.json"
+			home, _ := os.UserHomeDir()
+			return filepath.Join(home, ".claude.json")
 		},
-		displayPath: ".mcp.json",
+		displayPath: "~/.claude.json",
 	},
 	"cursor": {
 		name: "Cursor",
@@ -71,7 +72,7 @@ var mcpCmd = &cobra.Command{
 	Long: `Manages the Mindex MCP server integration with AI tools.
 
   Supported tools:
-    claude-code     .mcp.json in the current directory
+    claude-code     ~/.claude.json (global, all projects)
     cursor          .cursor/mcp.json in the current directory
     windsurf        ~/.codeium/windsurf/mcp_config.json
     claude-desktop  Claude Desktop config file

@@ -237,8 +237,8 @@ func TestMcpToolsPathResolution(t *testing.T) {
 	}{
 		{
 			key: "claude-code",
-			check: func(p string) bool { return p == ".mcp.json" },
-			desc:  "should be .mcp.json in the current directory",
+			check: func(p string) bool { return filepath.Base(p) == ".claude.json" },
+			desc:  "should be ~/.claude.json",
 		},
 		{
 			key: "cursor",
