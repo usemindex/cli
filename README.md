@@ -1,6 +1,8 @@
-# Mindex CLI
+# Stop using naive RAG
 
-Better context than RAG. See for yourself:
+Most RAG systems lose relationships between documents. Mindex doesn't.
+
+See the difference:
 
 ```bash
 mindex context "how does the payment flow work?" --compare
@@ -12,7 +14,8 @@ mindex context "how does the payment flow work?" --compare
   └─────────────────────────────────────────────────┘
 
   [payment-flow.md] (similarity: 71%)
-  The payment system uses Stripe checkout sessions to process...
+  The payment system uses Stripe checkout sessions.
+  (No mention of webhooks, billing state, or downstream effects)
 
   ┌─────────────────────────────────────────────────┐
   │  MINDEX GRAPHRAG (similarity + relationships)   │
@@ -24,10 +27,12 @@ mindex context "how does the payment flow work?" --compare
 
   === KNOWLEDGE GRAPH ===
   [billing-setup.md] (relevance: 85%)
-  Webhook handling: checkout.session.completed updates subscription...
+  Webhook handling: checkout.session.completed updates subscription
+  status, triggers email notification, and syncs plan limits...
 
   [api-reference.md] (relevance: 78%)
-  POST /billing/checkout creates Stripe session with org metadata...
+  POST /billing/checkout creates Stripe session with org metadata,
+  links customer to subscription, and validates plan limits...
 
   Sources: payment-flow.md, billing-setup.md (via RELATES_TO), api-reference.md
 
@@ -36,7 +41,17 @@ mindex context "how does the payment flow work?" --compare
   Mindex = similarity + knowledge graph + relationships
 ```
 
+Mindex builds a memory layer using knowledge graphs, so your AI understands relationships between your documents — not just similarity.
+
 Works with Claude, Cursor, Windsurf and any MCP-compatible tool.
+
+## Try it yourself
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usemindex/cli/main/install.sh | sh
+mindex auth
+mindex context "your question here" --compare
+```
 
 ## Install
 
