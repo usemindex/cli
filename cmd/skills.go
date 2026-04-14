@@ -110,10 +110,17 @@ var skillsGetCmd = &cobra.Command{
 	RunE:  runSkillsGet,
 }
 
+var skillsUpdateCmd = &cobra.Command{
+	Use:   "update",
+	Short: "Update all installed skills to the latest version",
+	RunE:  runSkillsUpdate,
+}
+
 func init() {
 	skillsCmd.AddCommand(skillsInstallCmd)
 	skillsCmd.AddCommand(skillsListCmd)
 	skillsCmd.AddCommand(skillsGetCmd)
+	skillsCmd.AddCommand(skillsUpdateCmd)
 	rootCmd.AddCommand(skillsCmd)
 }
 
@@ -180,6 +187,57 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+func runSkillsUpdate(cmd *cobra.Command, args []string) error {
+	index, err := fetchSkillIndex()
+	if err != nil {
+		return fmt.Errorf("failed to fetch skills: %w", err)
+	}
+
+	w := cmd.OutOrStdout()
+	updated := 0
+
+	for _, toolKey := range skillInstallerOrder {
+		installer := skillInstallers[toolKey]
+
+		// Check if any skill is installed for this tool
+		hasAny := false
+		for _, skill := range index {
+			if _, err := os.Stat(installer.check(skill.Name)); err == nil {
+				hasAny = true
+				break
+			}
+		}
+		if !hasAny {
+			continue
+		}
+
+		// Update installed skills
+		for _, skill := range index {
+			if _, err := os.Stat(installer.check(skill.Name)); err != nil {
+				continue // not installed, skip
+			}
+			content, err := fetchSkillContent(skill.Name)
+			if err != nil {
+				fmt.Fprintf(w, "  x %s (%s) — %s\n", skill.Name, installer.name, err)
+				continue
+			}
+			if _, err := installer.write(skill.Name, skill.Description, content); err != nil {
+				fmt.Fprintf(w, "  x %s (%s) — %s\n", skill.Name, installer.name, err)
+				continue
+			}
+			fmt.Fprintf(w, "  ✓ %s updated for %s\n", skill.Name, installer.name)
+			updated++
+		}
+	}
+
+	if updated == 0 {
+		fmt.Fprintln(w, "No installed skills found. Run 'mindex skills install <tool>' first.")
+	} else {
+		fmt.Fprintf(w, "\n%d skill(s) updated.\n", updated)
+	}
 	return nil
 }
 
