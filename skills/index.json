@@ -1,0 +1,10 @@
+[
+  {
+    "name": "write-docs",
+    "description": "Write or improve documentation optimized for knowledge graphs and semantic search"
+  },
+  {
+    "name": "organize-docs",
+    "description": "Analyze files and suggest how to organize them into namespaces for Mindex"
+  }
+]
