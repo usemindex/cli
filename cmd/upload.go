@@ -63,7 +63,7 @@ func runUpload(cmd *cobra.Command, args []string) error {
 
 	ns := namespace
 	if ns == "" {
-		ns = cfg.DefaultNamespace
+		return fmt.Errorf("namespace is required. Use -n <namespace>\n\nExample: mindex upload file.md -n docs")
 	}
 
 	client := api.New(cfg.APIURL, cfg.APIKey)
