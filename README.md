@@ -108,6 +108,30 @@ mindex mcp install claude-desktop   # Claude Desktop
 
 > `mindex auth` automatically updates MCP configs when you change your API key.
 
+## AI Skills
+
+Install reusable AI prompts that teach your coding tools how to work with Mindex:
+
+```bash
+mindex skills install claude-code   # Install for Claude Code
+mindex skills install cursor        # Install for Cursor
+mindex skills install windsurf      # Install for Windsurf
+```
+
+| Skill | What it does |
+|-------|-------------|
+| `write-docs` | Write documentation optimized for knowledge graphs |
+| `organize-docs` | Suggest namespaces and file organization |
+| `troubleshoot` | Search knowledge base for errors before using training data |
+| `onboarding` | Build learning paths from connected documents |
+| `audit-docs` | Find duplicates, gaps, orphans, and stale content |
+
+```bash
+mindex skills list                  # See available skills
+mindex skills get write-docs        # Print skill content to stdout
+mindex skills update                # Update installed skills
+```
+
 ## Upload
 
 Supports multiple formats and batch upload:
@@ -134,6 +158,10 @@ Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.
 | `mindex namespaces create <name>` | Create a namespace |
 | `mindex mcp install <tool>` | Configure MCP server in AI tools |
 | `mindex mcp status` | Check MCP configuration status |
+| `mindex skills install <tool>` | Install AI skills for Claude Code, Cursor, or Windsurf |
+| `mindex skills list` | List available skills and install status |
+| `mindex skills get <skill>` | Print a skill's content to stdout |
+| `mindex skills update` | Update installed skills to latest version |
 | `mindex auth` | Configure API key (auto-updates MCP configs) |
 | `mindex config` | Show current configuration |
 | `mindex status` | Check API connectivity |
