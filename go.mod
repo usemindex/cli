@@ -1,6 +1,6 @@
 module github.com/usemindex/cli
 
-go 1.24.13
+go 1.25.9
 
 require (
 	github.com/charmbracelet/glamour v1.0.0
