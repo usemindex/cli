@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -106,16 +107,19 @@ func runContext(cmd *cobra.Command, args []string) error {
 func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) error {
 	w := cmd.OutOrStdout()
 
-	fmt.Fprintf(w, "  Comparing: \"%s\"\n\n", question)
+	fmt.Fprintf(w, "\n  Query: \"%s\"\n", question)
+	fmt.Fprintln(w, "  ════════════════════════════════════════════════════════")
 
-	// --- RAG (simple vector search) ---
-	fmt.Fprintln(w, "  ┌─────────────────────────────────────────────────┐")
-	fmt.Fprintln(w, "  │  NAIVE RAG (vector similarity only)             │")
-	fmt.Fprintln(w, "  └─────────────────────────────────────────────────┘")
+	// --- NAIVE RAG ---
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  ┌─── NAIVE RAG ────────────────────────────────────────")
+	fmt.Fprintln(w, "  │  Vector similarity only — finds text, misses context")
+	fmt.Fprintln(w, "  │")
 
-	ragResult, ragErr := client.Search(question, ns, 3)
+	ragResult, ragErr := client.Search(question, ns, 5)
+	ragCount := 0
 	if ragErr != nil {
-		fmt.Fprintf(w, "  Error: %s\n", ragErr)
+		fmt.Fprintf(w, "  │  Error: %s\n", ragErr)
 	} else {
 		items := extractResults(ragResult)
 		if items == nil {
@@ -124,98 +128,243 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 			}
 		}
 		if len(items) == 0 {
-			fmt.Fprintln(w, "  No results.")
+			fmt.Fprintln(w, "  │  (no results)")
 		} else {
+			ragCount = len(items)
 			for _, r := range items {
-				name := ""
-				for _, k := range []string{"file_name", "filename", "key", "name"} {
-					if v, ok := r[k].(string); ok && v != "" {
-						name = v
-						break
-					}
+				name := extractField(r, "file_name", "filename", "key", "name")
+				text := extractField(r, "text", "content", "snippet")
+				score := extractScore(r)
+
+				if name == "" {
+					continue
 				}
-				text := ""
-				for _, k := range []string{"text", "content", "snippet"} {
-					if v, ok := r[k].(string); ok && v != "" {
-						text = v
-						break
-					}
-				}
-				score := 0.0
-				for _, k := range []string{"distance", "score", "similarity"} {
-					if v, ok := r[k].(float64); ok {
-						score = v
-						break
-					}
-				}
+				bar := renderBar(score, 20)
+				shortName := shortenPath(name)
+				fmt.Fprintf(w, "  │  %s %s %.0f%%\n", bar, shortName, score*100)
 				if text != "" {
-					if len(text) > 150 {
-						text = text[:150] + "..."
+					if len(text) > 100 {
+						text = text[:100] + "..."
 					}
-					fmt.Fprintf(w, "\n  [%s] (similarity: %.0f%%)\n", name, score*100)
-					fmt.Fprintf(w, "  %s\n", text)
+					// Indent text preview
+					fmt.Fprintf(w, "  │     %s\n", dimText(text))
 				}
 			}
 		}
 	}
 
-	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  │")
+	fmt.Fprintf(w, "  └─── %d documents found (flat list, no relationships)\n", ragCount)
 
-	// --- MINDEX (GraphRAG) ---
-	fmt.Fprintln(w, "  ┌─────────────────────────────────────────────────┐")
-	fmt.Fprintln(w, "  │  MINDEX GRAPHRAG (similarity + relationships)   │")
-	fmt.Fprintln(w, "  └─────────────────────────────────────────────────┘")
+	// --- MINDEX GRAPHRAG ---
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  ┌─── MINDEX GRAPHRAG ──────────────────────────────────")
+	fmt.Fprintln(w, "  │  Similarity + Knowledge Graph + Document Connections")
+	fmt.Fprintln(w, "  │")
 
 	contextResult, contextErr := client.Context(question, ns)
 	if contextErr != nil {
-		fmt.Fprintf(w, "  Error: %s\n", contextErr)
-	} else {
-		formattedContext, _ := contextResult["formatted_context"].(string)
-		rawSources, _ := contextResult["sources"].([]any)
+		fmt.Fprintf(w, "  │  Error: %s\n", contextErr)
+		fmt.Fprintln(w, "  └──────────────────────────────────────────────────────")
+		return nil
+	}
 
-		if formattedContext == "" {
-			fmt.Fprintln(w, "  No context found.")
-		} else {
-			// Truncate for compare view
-			lines := strings.Split(formattedContext, "\n")
-			shown := 0
-			for _, line := range lines {
-				if shown >= 15 {
-					fmt.Fprintln(w, "  ...")
-					break
-				}
-				fmt.Fprintf(w, "  %s\n", line)
-				shown++
+	rawSources, _ := contextResult["sources"].([]any)
+	rawConnections, _ := contextResult["graph_connections"].([]any)
+	rawStats, _ := contextResult["stats"].(map[string]any)
+
+	// Sources with relevance and relationship type
+	if len(rawSources) == 0 {
+		fmt.Fprintln(w, "  │  (no context found)")
+	} else {
+		// Separate direct hits from graph-discovered
+		var directHits []map[string]any
+		var graphDiscovered []map[string]any
+		for _, s := range rawSources {
+			src, _ := s.(map[string]any)
+			rel, _ := src["relationship"].(string)
+			if rel == "" {
+				directHits = append(directHits, src)
+			} else {
+				graphDiscovered = append(graphDiscovered, src)
 			}
 		}
 
-		if len(rawSources) > 0 {
-			var names []string
-			for _, s := range rawSources {
-				src, _ := s.(map[string]any)
+		// Direct hits (from vector search)
+		if len(directHits) > 0 {
+			fmt.Fprintln(w, "  │  ◆ Direct matches (semantic search)")
+			for _, src := range directHits {
+				name, _ := src["filename"].(string)
+				relevance, _ := src["relevance"].(float64)
+				bar := renderBar(relevance, 20)
+				fmt.Fprintf(w, "  │    %s %s %.0f%%\n", bar, shortenPath(name), relevance*100)
+			}
+		}
+
+		// Graph-discovered documents
+		if len(graphDiscovered) > 0 {
+			fmt.Fprintln(w, "  │")
+			fmt.Fprintln(w, "  │  ◇ Discovered via knowledge graph")
+			for _, src := range graphDiscovered {
 				name, _ := src["filename"].(string)
 				rel, _ := src["relationship"].(string)
-				if name != "" {
-					if rel != "" {
-						names = append(names, fmt.Sprintf("%s (via %s)", name, rel))
-					} else {
-						names = append(names, name)
-					}
-				}
-			}
-			if len(names) > 0 {
-				fmt.Fprintf(w, "\n  Sources: %s\n", strings.Join(names, ", "))
+				fmt.Fprintf(w, "  │    ╰─ %s  ← %s\n", shortenPath(name), formatRelType(rel))
 			}
 		}
 	}
 
+	// Graph connections visualization
+	if len(rawConnections) > 0 {
+		fmt.Fprintln(w, "  │")
+		fmt.Fprintln(w, "  │  ◈ Document relationships")
+		fmt.Fprintln(w, "  │")
+
+		// Deduplicate connections by source-target pair
+		type connKey struct{ src, tgt string }
+		seen := map[connKey]bool{}
+
+		for _, c := range rawConnections {
+			conn, _ := c.(map[string]any)
+			source, _ := conn["source"].(string)
+			target, _ := conn["target"].(string)
+			relType, _ := conn["rel_type"].(string)
+			score, _ := conn["similarity_score"].(float64)
+			justification, _ := conn["justification"].(string)
+
+			if source == "" || target == "" {
+				continue
+			}
+			key := connKey{source, target}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			arrow := formatArrow(relType)
+			srcShort := shortenPath(source)
+			tgtShort := shortenPath(target)
+
+			if score > 0 {
+				fmt.Fprintf(w, "  │    %s %s %s  (%.0f%%)\n", srcShort, arrow, tgtShort, score*100)
+			} else {
+				fmt.Fprintf(w, "  │    %s %s %s\n", srcShort, arrow, tgtShort)
+			}
+			if justification != "" {
+				if len(justification) > 80 {
+					justification = justification[:80] + "..."
+				}
+				fmt.Fprintf(w, "  │      %s\n", dimText(justification))
+			}
+		}
+	}
+
+	// Stats
+	fmt.Fprintln(w, "  │")
+	vectorChunks := 0
+	graphConns := 0
+	docsRead := 0
+	if rawStats != nil {
+		if v, ok := rawStats["vector_chunks"].(float64); ok {
+			vectorChunks = int(v)
+		}
+		if v, ok := rawStats["graph_connections"].(float64); ok {
+			graphConns = int(v)
+		}
+		if v, ok := rawStats["documents_read"].(float64); ok {
+			docsRead = int(v)
+		}
+	}
+	fmt.Fprintf(w, "  └─── %d chunks · %d connections · %d documents read\n", vectorChunks, graphConns, docsRead)
+
+	// Summary
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  ─────────────────────────────────────────────────")
-	fmt.Fprintln(w, "  RAG = similarity matching only")
-	fmt.Fprintln(w, "  Mindex = similarity + knowledge graph + relationships")
+	fmt.Fprintln(w, "  ════════════════════════════════════════════════════════")
+	if graphConns > 0 {
+		fmt.Fprintf(w, "  GraphRAG found %d document relationships that naive RAG missed.\n", graphConns)
+		fmt.Fprintln(w, "  These connections provide context about HOW documents relate,")
+		fmt.Fprintln(w, "  not just that they contain similar words.")
+	} else {
+		fmt.Fprintln(w, "  No graph connections found for this query.")
+		fmt.Fprintln(w, "  Upload more documents to build richer knowledge graph connections.")
+	}
 	fmt.Fprintln(w, "")
 
 	return nil
+}
+
+// --- Helpers ---
+
+func extractField(r map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := r[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func extractScore(r map[string]any) float64 {
+	for _, k := range []string{"distance", "score", "similarity", "relevance"} {
+		if v, ok := r[k].(float64); ok {
+			return v
+		}
+	}
+	return 0
+}
+
+func renderBar(score float64, width int) string {
+	filled := int(math.Round(score * float64(width)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	return "█" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+func shortenPath(path string) string {
+	parts := strings.Split(path, "/")
+	if len(parts) <= 2 {
+		return path
+	}
+	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+}
+
+func formatRelType(rel string) string {
+	switch rel {
+	case "RELATES_TO":
+		return "related"
+	case "LINKS_TO":
+		return "linked"
+	case "HAS_TAG":
+		return "tagged"
+	default:
+		if strings.HasPrefix(rel, "2-hop:") {
+			inner := strings.TrimPrefix(rel, "2-hop:")
+			return "2-hop " + formatRelType(inner)
+		}
+		return strings.ToLower(strings.ReplaceAll(rel, "_", " "))
+	}
+}
+
+func formatArrow(relType string) string {
+	switch relType {
+	case "RELATES_TO":
+		return "──relates──→"
+	case "LINKS_TO":
+		return "──links────→"
+	case "HAS_TAG":
+		return "──tagged───→"
+	default:
+		label := strings.ToLower(strings.ReplaceAll(relType, "_", " "))
+		return fmt.Sprintf("──%s──→", label)
+	}
+}
+
+func dimText(s string) string {
+	// ANSI dim
+	return "\033[2m" + s + "\033[0m"
 }
 
 func extractResults(result map[string]any) []map[string]any {
