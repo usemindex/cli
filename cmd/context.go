@@ -107,13 +107,13 @@ func runContext(cmd *cobra.Command, args []string) error {
 func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) error {
 	w := cmd.OutOrStdout()
 
-	fmt.Fprintf(w, "\n  Query: \"%s\"\n", question)
-	fmt.Fprintln(w, "  ════════════════════════════════════════════════════════")
+	fmt.Fprintf(w, "\n  %s \"%s\"\n", bold("Query:"), cyan(question))
+	fmt.Fprintln(w, gray("  ════════════════════════════════════════════════════════"))
 
 	// --- NAIVE RAG ---
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  ┌─── NAIVE RAG ────────────────────────────────────────")
-	fmt.Fprintln(w, "  │  Vector similarity only — finds text, misses context")
+	fmt.Fprintf(w, "  ┌─── %s ────────────────────────────────────────\n", yellow("NAIVE RAG"))
+	fmt.Fprintf(w, "  │  %s\n", dim("Vector similarity only — finds text, misses context"))
 	fmt.Fprintln(w, "  │")
 
 	ragResult, ragErr := client.Search(question, ns, 5)
@@ -141,25 +141,24 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 				}
 				bar := renderBar(score, 20)
 				shortName := shortenPath(name)
-				fmt.Fprintf(w, "  │  %s %s %.0f%%\n", bar, shortName, score*100)
+				fmt.Fprintf(w, "  │  %s %s %s\n", yellow(bar), white(shortName), dim(fmt.Sprintf("%.0f%%", score*100)))
 				if text != "" {
 					if len(text) > 100 {
 						text = text[:100] + "..."
 					}
-					// Indent text preview
-					fmt.Fprintf(w, "  │     %s\n", dimText(text))
+					fmt.Fprintf(w, "  │     %s\n", dim(text))
 				}
 			}
 		}
 	}
 
 	fmt.Fprintln(w, "  │")
-	fmt.Fprintf(w, "  └─── %d documents found (flat list, no relationships)\n", ragCount)
+	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d documents found (flat list, no relationships)", ragCount)))
 
 	// --- MINDEX GRAPHRAG ---
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  ┌─── MINDEX GRAPHRAG ──────────────────────────────────")
-	fmt.Fprintln(w, "  │  Similarity + Knowledge Graph + Document Connections")
+	fmt.Fprintf(w, "  ┌─── %s ──────────────────────────────────\n", green("MINDEX GRAPHRAG"))
+	fmt.Fprintf(w, "  │  %s\n", dim("Similarity + Knowledge Graph + Document Connections"))
 	fmt.Fprintln(w, "  │")
 
 	contextResult, contextErr := client.Context(question, ns)
@@ -192,23 +191,23 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 
 		// Direct hits (from vector search)
 		if len(directHits) > 0 {
-			fmt.Fprintln(w, "  │  ◆ Direct matches (semantic search)")
+			fmt.Fprintf(w, "  │  %s\n", bold("◆ Direct matches (semantic search)"))
 			for _, src := range directHits {
 				name, _ := src["filename"].(string)
 				relevance, _ := src["relevance"].(float64)
 				bar := renderBar(relevance, 20)
-				fmt.Fprintf(w, "  │    %s %s %.0f%%\n", bar, shortenPath(name), relevance*100)
+				fmt.Fprintf(w, "  │    %s %s %s\n", green(bar), white(shortenPath(name)), dim(fmt.Sprintf("%.0f%%", relevance*100)))
 			}
 		}
 
 		// Graph-discovered documents
 		if len(graphDiscovered) > 0 {
 			fmt.Fprintln(w, "  │")
-			fmt.Fprintln(w, "  │  ◇ Discovered via knowledge graph")
+			fmt.Fprintf(w, "  │  %s\n", bold("◇ Discovered via knowledge graph"))
 			for _, src := range graphDiscovered {
 				name, _ := src["filename"].(string)
 				rel, _ := src["relationship"].(string)
-				fmt.Fprintf(w, "  │    ╰─ %s  ← %s\n", shortenPath(name), formatRelType(rel))
+				fmt.Fprintf(w, "  │    ╰─ %s  ← %s\n", cyan(shortenPath(name)), magenta(formatRelType(rel)))
 			}
 		}
 	}
@@ -216,7 +215,7 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 	// Graph connections visualization
 	if len(rawConnections) > 0 {
 		fmt.Fprintln(w, "  │")
-		fmt.Fprintln(w, "  │  ◈ Document relationships")
+		fmt.Fprintf(w, "  │  %s\n", bold("◈ Document relationships"))
 		fmt.Fprintln(w, "  │")
 
 		// Deduplicate connections by source-target pair
@@ -245,15 +244,15 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 			tgtShort := shortenPath(target)
 
 			if score > 0 {
-				fmt.Fprintf(w, "  │    %s %s %s  (%.0f%%)\n", srcShort, arrow, tgtShort, score*100)
+				fmt.Fprintf(w, "  │    %s %s %s  %s\n", cyan(srcShort), magenta(arrow), cyan(tgtShort), dim(fmt.Sprintf("%.0f%%", score*100)))
 			} else {
-				fmt.Fprintf(w, "  │    %s %s %s\n", srcShort, arrow, tgtShort)
+				fmt.Fprintf(w, "  │    %s %s %s\n", cyan(srcShort), magenta(arrow), cyan(tgtShort))
 			}
 			if justification != "" {
 				if len(justification) > 80 {
 					justification = justification[:80] + "..."
 				}
-				fmt.Fprintf(w, "  │      %s\n", dimText(justification))
+				fmt.Fprintf(w, "  │      %s\n", dim(justification))
 			}
 		}
 	}
@@ -274,18 +273,18 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 			docsRead = int(v)
 		}
 	}
-	fmt.Fprintf(w, "  └─── %d chunks · %d connections · %d documents read\n", vectorChunks, graphConns, docsRead)
+	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d chunks · %d connections · %d documents read", vectorChunks, graphConns, docsRead)))
 
 	// Summary
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  ════════════════════════════════════════════════════════")
+	fmt.Fprintln(w, gray("  ════════════════════════════════════════════════════════"))
 	if graphConns > 0 {
-		fmt.Fprintf(w, "  GraphRAG found %d document relationships that naive RAG missed.\n", graphConns)
-		fmt.Fprintln(w, "  These connections provide context about HOW documents relate,")
-		fmt.Fprintln(w, "  not just that they contain similar words.")
+		fmt.Fprintf(w, "  %s found %s that naive RAG missed.\n", green("GraphRAG"), bold(fmt.Sprintf("%d document relationships", graphConns)))
+		fmt.Fprintf(w, "  %s\n", dim("These connections provide context about HOW documents relate,"))
+		fmt.Fprintf(w, "  %s\n", dim("not just that they contain similar words."))
 	} else {
-		fmt.Fprintln(w, "  No graph connections found for this query.")
-		fmt.Fprintln(w, "  Upload more documents to build richer knowledge graph connections.")
+		fmt.Fprintf(w, "  %s\n", yellow("No graph connections found for this query."))
+		fmt.Fprintf(w, "  %s\n", dim("Upload more documents to build richer knowledge graph connections."))
 	}
 	fmt.Fprintln(w, "")
 
@@ -362,10 +361,24 @@ func formatArrow(relType string) string {
 	}
 }
 
-func dimText(s string) string {
-	// ANSI dim
-	return "\033[2m" + s + "\033[0m"
+// --- ANSI Colors ---
+
+func c(code, s string) string {
+	if noColor {
+		return s
+	}
+	return fmt.Sprintf("\033[%sm%s\033[0m", code, s)
 }
+
+func dim(s string) string     { return c("2", s) }
+func bold(s string) string    { return c("1", s) }
+func cyan(s string) string    { return c("36", s) }
+func green(s string) string   { return c("32", s) }
+func yellow(s string) string  { return c("33", s) }
+func magenta(s string) string { return c("35", s) }
+func blue(s string) string    { return c("34", s) }
+func gray(s string) string    { return c("90", s) }
+func white(s string) string   { return c("97", s) }
 
 func extractResults(result map[string]any) []map[string]any {
 	keys := []string{"results", "documents", "data", "items"}
