@@ -87,6 +87,10 @@ func checkForUpdateQuiet() {
 	current := strings.TrimPrefix(Version, "v")
 
 	if latest != "" && latest != current {
+		// Don't show update notice when running "mindex update"
+		if len(os.Args) >= 2 && os.Args[1] == "update" {
+			return
+		}
 		updateMsg <- fmt.Sprintf("\n  Update available: v%s → v%s\n  Run: mindex update\n", current, latest)
 	}
 }
