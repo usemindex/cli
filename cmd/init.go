@@ -123,7 +123,7 @@ func writeTarget(w io.Writer, t editorTarget, cfg *config.Config) error {
 			return fmt.Errorf("error reading %s: %w", t.filePath, err)
 		}
 
-		if strings.Contains(string(existing), "mindex") || strings.Contains(string(existing), "Mindex") {
+		if strings.Contains(string(existing), "Knowledge Base (Mindex)") || strings.Contains(string(existing), "mindex_context") {
 			fmt.Fprintf(w, "  %s  %s (already configured)\n", t.name, t.filePath)
 			return nil
 		}
