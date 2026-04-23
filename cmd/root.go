@@ -50,6 +50,10 @@ func Execute() {
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		// usage errors exit with code 2 (Cobra convention)
+		if _, ok := err.(*usageError); ok {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,4 +248,93 @@ func (c *Client) CreateNamespace(name string) (map[string]any, error) {
 // Status retorna o status de saúde da API.
 func (c *Client) Status() (map[string]any, error) {
 	return c.do(http.MethodGet, "/admin/health", nil)
+}
+
+// RelatedDocument representa um documento relacionado via entidades compartilhadas.
+type RelatedDocument struct {
+	Filename       string   `json:"filename"`
+	Title          *string  `json:"title"`
+	SharedEntities []string `json:"shared_entities"`
+	SharedCount    int      `json:"shared_count"`
+	Strength       float64  `json:"strength"`
+}
+
+// EntityInDocument representa uma entidade presente no documento, com contagem de
+// quantos outros documentos também a mencionam.
+type EntityInDocument struct {
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	AlsoMentionedIn int    `json:"also_mentioned_in"`
+}
+
+// RelatedDocumentsResponse é a resposta do endpoint /documents/:key/related.
+type RelatedDocumentsResponse struct {
+	Document          string             `json:"document"`
+	Title             *string            `json:"title"`
+	Related           []RelatedDocument  `json:"related"`
+	EntitiesInThisDoc []EntityInDocument `json:"entities_in_this_doc"`
+}
+
+// RelatedDocuments retorna documentos relacionados a um documento via entidades compartilhadas.
+// A key pode incluir prefixo de namespace (ex: "docs/slack.md") — o namespace será extraído
+// e enviado como query param, e apenas o filename é colocado no path.
+func (c *Client) RelatedDocuments(key string, limit, minShared int) (*RelatedDocumentsResponse, error) {
+	filename := key
+	ns := ""
+	if idx := strings.Index(key, "/"); idx >= 0 {
+		ns = key[:idx]
+		filename = key[idx+1:]
+	}
+
+	path := fmt.Sprintf("/api/v1/%s/documents/%s/related", c.OrgSlug, url.PathEscape(filename))
+
+	params := url.Values{}
+	if limit > 0 {
+		params.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if minShared > 0 {
+		params.Set("min_shared", fmt.Sprintf("%d", minShared))
+	}
+	if ns != "" {
+		params.Set("namespace", ns)
+	}
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("erro na requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao ler resposta: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.Unmarshal(respBody, &errResp)
+		msg := ""
+		if m, ok := errResp["error"].(string); ok {
+			msg = m
+		} else if m, ok := errResp["message"].(string); ok {
+			msg = m
+		}
+		return nil, &APIError{Status: resp.StatusCode, Message: msg}
+	}
+
+	var result RelatedDocumentsResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("erro ao deserializar resposta: %w", err)
+	}
+	return &result, nil
 }

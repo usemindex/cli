@@ -180,6 +180,124 @@ func TestListNamespaces(t *testing.T) {
 	}
 }
 
+func TestRelatedDocumentsSuccess(t *testing.T) {
+	title := "Slack"
+	relTitle := "Discord"
+	expected := RelatedDocumentsResponse{
+		Document: "docs/slack.md",
+		Title:    &title,
+		Related: []RelatedDocument{
+			{
+				Filename:       "docs/discord.md",
+				Title:          &relTitle,
+				SharedEntities: []string{"subscription.cancelled", "webhook"},
+				SharedCount:    2,
+				Strength:       0.67,
+			},
+		},
+		EntitiesInThisDoc: []EntityInDocument{
+			{Name: "subscription.cancelled", Type: "event", AlsoMentionedIn: 3},
+		},
+	}
+
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("método esperado GET, obtido %s", r.Method)
+		}
+		// path should be /api/v1/minha-org/documents/slack.md/related
+		expectedPath := "/api/v1/minha-org/documents/slack.md/related"
+		if r.URL.Path != expectedPath {
+			t.Errorf("caminho: esperado %q, obtido %q", expectedPath, r.URL.Path)
+		}
+		// query params
+		if q := r.URL.Query().Get("limit"); q != "10" {
+			t.Errorf("limit: esperado '10', obtido %q", q)
+		}
+		if q := r.URL.Query().Get("min_shared"); q != "2" {
+			t.Errorf("min_shared: esperado '2', obtido %q", q)
+		}
+		if q := r.URL.Query().Get("namespace"); q != "docs" {
+			t.Errorf("namespace: esperado 'docs', obtido %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(expected)
+	}))
+	defer servidor.Close()
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "minha-org"
+	result, err := c.RelatedDocuments("docs/slack.md", 10, 2)
+	if err != nil {
+		t.Fatalf("RelatedDocuments() erro inesperado: %v", err)
+	}
+	if result.Document != "docs/slack.md" {
+		t.Errorf("document: esperado 'docs/slack.md', obtido %q", result.Document)
+	}
+	if len(result.Related) != 1 {
+		t.Fatalf("related: esperado 1 item, obtido %d", len(result.Related))
+	}
+	if result.Related[0].Filename != "docs/discord.md" {
+		t.Errorf("related filename: obtido %q", result.Related[0].Filename)
+	}
+	if result.Related[0].SharedCount != 2 {
+		t.Errorf("shared_count: esperado 2, obtido %d", result.Related[0].SharedCount)
+	}
+	if len(result.EntitiesInThisDoc) != 1 {
+		t.Errorf("entities: esperado 1 item, obtido %d", len(result.EntitiesInThisDoc))
+	}
+}
+
+func TestRelatedDocuments404(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": "document not found"})
+	}))
+	defer servidor.Close()
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "minha-org"
+	_, err := c.RelatedDocuments("docs/missing.md", 10, 1)
+	if err == nil {
+		t.Fatal("RelatedDocuments() deveria retornar erro para 404")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("erro deveria ser *APIError, obtido %T", err)
+	}
+	if apiErr.Status != 404 {
+		t.Errorf("status: esperado 404, obtido %d", apiErr.Status)
+	}
+}
+
+func TestRelatedDocumentsNoNamespace(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// path without prefix should not include namespace query param
+		if q := r.URL.Query().Get("namespace"); q != "" {
+			t.Errorf("namespace não deveria estar presente, obtido %q", q)
+		}
+		expectedPath := "/api/v1/minha-org/documents/slack.md/related"
+		if r.URL.Path != expectedPath {
+			t.Errorf("caminho: esperado %q, obtido %q", expectedPath, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(RelatedDocumentsResponse{
+			Document: "slack.md",
+			Related:  []RelatedDocument{},
+		})
+	}))
+	defer servidor.Close()
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "minha-org"
+	result, err := c.RelatedDocuments("slack.md", 10, 1)
+	if err != nil {
+		t.Fatalf("RelatedDocuments() erro inesperado: %v", err)
+	}
+	if result.Document != "slack.md" {
+		t.Errorf("document: obtido %q", result.Document)
+	}
+}
+
 func TestDelete403(t *testing.T) {
 	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
