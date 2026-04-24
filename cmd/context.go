@@ -210,12 +210,26 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 		}
 
 		if len(directHits) > 0 {
+			// Normaliza scores relativos ao top pra display justo (RRF fusion
+			// retorna 0.01-0.08 em absoluto; NAIVE RAG mostra cosine 60-70%).
+			// Sem normalizar, a barra do GraphRAG parece sempre 3% mesmo quando
+			// o doc e 100% dominante na query.
+			maxScore := 0.0
+			for _, src := range directHits {
+				if s, _ := src["score"].(float64); s > maxScore {
+					maxScore = s
+				}
+			}
 			fmt.Fprintf(w, "  │  %s\n", bold("◆ Direct matches (vector + BM25)"))
 			for _, src := range directHits {
 				name, _ := src["filename"].(string)
 				score, _ := src["score"].(float64)
-				bar := renderBar(score, 20)
-				fmt.Fprintf(w, "  │    %s %s %s\n", green(bar), white(shortenPath(name)), dim(fmt.Sprintf("%.0f%%", score*100)))
+				rel := 0.0
+				if maxScore > 0 {
+					rel = score / maxScore
+				}
+				bar := renderBar(rel, 20)
+				fmt.Fprintf(w, "  │    %s %s %s\n", green(bar), white(shortenPath(name)), dim(fmt.Sprintf("%.0f%%", rel*100)))
 			}
 		}
 
