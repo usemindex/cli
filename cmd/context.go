@@ -123,11 +123,12 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 	// --- NAIVE RAG ---
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "  ┌─── %s ────────────────────────────────────────\n", yellow("NAIVE RAG"))
-	fmt.Fprintf(w, "  │  %s\n", dim("Vector similarity only — finds text, misses context"))
+	fmt.Fprintf(w, "  │  %s\n", dim("Vector similarity only — flat list, no relationships"))
 	fmt.Fprintln(w, "  │")
 
-	ragResult, ragErr := client.Search(question, ns, 5)
-	ragCount := 0
+	ragResult, ragErr := client.Search(question, ns, 10)
+	var naiveDocs []string
+	naiveSet := map[string]bool{}
 	if ragErr != nil {
 		fmt.Fprintf(w, "  │  Error: %s\n", ragErr)
 	} else {
@@ -140,35 +141,27 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 		if len(items) == 0 {
 			fmt.Fprintln(w, "  │  (no results)")
 		} else {
-			ragCount = len(items)
 			for _, r := range items {
 				name := extractField(r, "file_name", "filename", "key", "name")
-				text := extractField(r, "text", "content", "snippet")
-				score := extractScore(r)
-
-				if name == "" {
+				if name == "" || naiveSet[name] {
 					continue
 				}
-				bar := renderBar(score, 20)
-				shortName := shortenPath(name)
-				fmt.Fprintf(w, "  │  %s %s %s\n", yellow(bar), white(shortName), dim(fmt.Sprintf("%.0f%%", score*100)))
-				if text != "" {
-					if len(text) > 100 {
-						text = text[:100] + "..."
-					}
-					fmt.Fprintf(w, "  │     %s\n", dim(text))
-				}
+				naiveSet[name] = true
+				naiveDocs = append(naiveDocs, name)
+			}
+			for i, name := range naiveDocs {
+				fmt.Fprintf(w, "  │   %s %s\n", dim(fmt.Sprintf("%2d.", i+1)), white(shortenPath(name)))
 			}
 		}
 	}
 
 	fmt.Fprintln(w, "  │")
-	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d documents found (flat list, no relationships)", ragCount)))
+	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d documents found", len(naiveDocs))))
 
 	// --- MINDEX GRAPHRAG ---
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "  ┌─── %s ──────────────────────────────────\n", green("MINDEX GRAPHRAG"))
-	fmt.Fprintf(w, "  │  %s\n", dim("Similarity + Knowledge Graph + Document Connections"))
+	fmt.Fprintf(w, "  │  %s\n", dim("Vector + BM25 + Knowledge Graph traversal"))
 	fmt.Fprintln(w, "  │")
 
 	contextResult, contextErr := client.Context(question, ns)
@@ -178,68 +171,30 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 		return nil
 	}
 
-	// v2 ContextResponse shape:
-	//   sources: [{filename, score, paths: ["vector"|"bm25"|"graph"], heading, snippet}]
-	//   insights: [{subject, predicate, object, confidence, source:"graph"}]
-	//   path_mix: {vector, bm25, graph}
 	rawSources, _ := contextResult["sources"].([]any)
 	rawInsights, _ := contextResult["insights"].([]any)
-	rawPathMix, _ := contextResult["path_mix"].(map[string]any)
 
-	if len(rawSources) == 0 {
+	var graphDocs []string
+	graphSet := map[string]bool{}
+	for _, s := range rawSources {
+		src, _ := s.(map[string]any)
+		name, _ := src["filename"].(string)
+		if name == "" || graphSet[name] {
+			continue
+		}
+		graphSet[name] = true
+		graphDocs = append(graphDocs, name)
+	}
+
+	if len(graphDocs) == 0 {
 		fmt.Fprintln(w, "  │  (no context found)")
 	} else {
-		// Direct = docs encontrados via vector ou bm25; Graph-only = so graph path.
-		var directHits []map[string]any
-		var graphDiscovered []map[string]any
-		for _, s := range rawSources {
-			src, _ := s.(map[string]any)
-			paths, _ := src["paths"].([]any)
-			viaVectorOrBm25 := false
-			for _, p := range paths {
-				if ps, _ := p.(string); ps == "vector" || ps == "bm25" {
-					viaVectorOrBm25 = true
-					break
-				}
+		for i, name := range graphDocs {
+			badge := ""
+			if !naiveSet[name] {
+				badge = " " + green("[+ only in GraphRAG]")
 			}
-			if viaVectorOrBm25 {
-				directHits = append(directHits, src)
-			} else {
-				graphDiscovered = append(graphDiscovered, src)
-			}
-		}
-
-		if len(directHits) > 0 {
-			// Normaliza scores relativos ao top pra display justo (RRF fusion
-			// retorna 0.01-0.08 em absoluto; NAIVE RAG mostra cosine 60-70%).
-			// Sem normalizar, a barra do GraphRAG parece sempre 3% mesmo quando
-			// o doc e 100% dominante na query.
-			maxScore := 0.0
-			for _, src := range directHits {
-				if s, _ := src["score"].(float64); s > maxScore {
-					maxScore = s
-				}
-			}
-			fmt.Fprintf(w, "  │  %s\n", bold("◆ Direct matches (vector + BM25)"))
-			for _, src := range directHits {
-				name, _ := src["filename"].(string)
-				score, _ := src["score"].(float64)
-				rel := 0.0
-				if maxScore > 0 {
-					rel = score / maxScore
-				}
-				bar := renderBar(rel, 20)
-				fmt.Fprintf(w, "  │    %s %s %s\n", green(bar), white(shortenPath(name)), dim(fmt.Sprintf("%.0f%%", rel*100)))
-			}
-		}
-
-		if len(graphDiscovered) > 0 {
-			fmt.Fprintln(w, "  │")
-			fmt.Fprintf(w, "  │  %s\n", bold("◇ Discovered via knowledge graph"))
-			for _, src := range graphDiscovered {
-				name, _ := src["filename"].(string)
-				fmt.Fprintf(w, "  │    ╰─ %s\n", cyan(shortenPath(name)))
-			}
+			fmt.Fprintf(w, "  │   %s %s%s\n", dim(fmt.Sprintf("%2d.", i+1)), white(shortenPath(name)), badge)
 		}
 	}
 
@@ -247,7 +202,7 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 	graphConns := len(rawInsights)
 	if graphConns > 0 {
 		fmt.Fprintln(w, "  │")
-		fmt.Fprintf(w, "  │  %s\n", bold("◈ Graph insights (entity triples)"))
+		fmt.Fprintf(w, "  │  %s\n", bold("◈ Cross-document relationships"))
 		fmt.Fprintln(w, "  │")
 		type insightKey struct{ s, p, o string }
 		seen := map[insightKey]bool{}
@@ -256,7 +211,6 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 			subj, _ := m["subject"].(string)
 			pred, _ := m["predicate"].(string)
 			obj, _ := m["object"].(string)
-			conf, _ := m["confidence"].(float64)
 			if subj == "" || pred == "" || obj == "" {
 				continue
 			}
@@ -266,33 +220,33 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 			}
 			seen[k] = true
 			arrow := formatArrow(pred)
-			if conf > 0 {
-				fmt.Fprintf(w, "  │    %s %s %s  %s\n", cyan(subj), magenta(arrow), cyan(obj), dim(fmt.Sprintf("%.0f%%", conf*100)))
-			} else {
-				fmt.Fprintf(w, "  │    %s %s %s\n", cyan(subj), magenta(arrow), cyan(obj))
-			}
+			fmt.Fprintf(w, "  │    %s %s %s\n", cyan(subj), magenta(arrow), cyan(obj))
 		}
 	}
 
-	// Stats do path_mix
 	fmt.Fprintln(w, "  │")
-	vectorChunks := 0
-	if v, ok := rawPathMix["vector"].(float64); ok {
-		vectorChunks = int(v)
-	}
-	docsRead := len(rawSources)
-	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d chunks · %d connections · %d documents read", vectorChunks, graphConns, docsRead)))
+	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d documents found · %d cross-document relationships", len(graphDocs), graphConns)))
 
-	// Summary
+	// --- Delta summary ---
+	extraDocs := 0
+	for _, name := range graphDocs {
+		if !naiveSet[name] {
+			extraDocs++
+		}
+	}
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, gray("  ════════════════════════════════════════════════════════"))
-	if graphConns > 0 {
-		fmt.Fprintf(w, "  %s found %s that naive RAG missed.\n", green("GraphRAG"), bold(fmt.Sprintf("%d document relationships", graphConns)))
-		fmt.Fprintf(w, "  %s\n", dim("These connections provide context about HOW documents relate,"))
-		fmt.Fprintf(w, "  %s\n", dim("not just that they contain similar words."))
+	if extraDocs > 0 || graphConns > 0 {
+		fmt.Fprintf(w, "  %s %s\n", green("✓"), bold("GraphRAG caught more than NAIVE:"))
+		if extraDocs > 0 {
+			fmt.Fprintf(w, "    %s %s\n", green("+"), bold(fmt.Sprintf("%d documents", extraDocs))+dim(" that naive RAG missed"))
+		}
+		if graphConns > 0 {
+			fmt.Fprintf(w, "    %s %s\n", green("+"), bold(fmt.Sprintf("%d entity relationships", graphConns))+dim(" (cross-document context)"))
+		}
 	} else {
-		fmt.Fprintf(w, "  %s\n", yellow("No graph connections found for this query."))
-		fmt.Fprintf(w, "  %s\n", dim("Upload more documents to build richer knowledge graph connections."))
+		fmt.Fprintf(w, "  %s\n", yellow("Both returned the same docs; no graph-only discoveries for this query."))
+		fmt.Fprintf(w, "  %s\n", dim("Try queries that mention specific entities (e.g. product names, events)."))
 	}
 	fmt.Fprintln(w, "")
 
