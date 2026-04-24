@@ -86,12 +86,14 @@ func runContext(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if len(rawSources) > 0 && !quiet {
+	// V2 ja emite "## Sources" dentro do markdown assembled; v1 nao emitia,
+	// entao o CLI appendava. Pra evitar duplicacao, so appenda se o contexto
+	// nao contiver uma secao Sources.
+	if len(rawSources) > 0 && !quiet && !strings.Contains(formattedContext, "## Sources") {
 		var sourceNames []string
 		for _, s := range rawSources {
 			src, _ := s.(map[string]any)
 			name, _ := src["filename"].(string)
-			// v2 usa "score"; v1 usava "relevance"
 			score, _ := src["score"].(float64)
 			if score == 0 {
 				score, _ = src["relevance"].(float64)
