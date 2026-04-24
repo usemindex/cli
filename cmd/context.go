@@ -64,7 +64,11 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return output.JSON(cmd.OutOrStdout(), result)
 	}
 
-	formattedContext, _ := result["formatted_context"].(string)
+	// v2 retorna "context" (markdown assembled); v1 retornava "formatted_context".
+	formattedContext, _ := result["context"].(string)
+	if formattedContext == "" {
+		formattedContext, _ = result["formatted_context"].(string)
+	}
 	rawSources, _ := result["sources"].([]any)
 
 	if formattedContext == "" && len(rawSources) == 0 {
@@ -87,10 +91,14 @@ func runContext(cmd *cobra.Command, args []string) error {
 		for _, s := range rawSources {
 			src, _ := s.(map[string]any)
 			name, _ := src["filename"].(string)
-			relevance, _ := src["relevance"].(float64)
+			// v2 usa "score"; v1 usava "relevance"
+			score, _ := src["score"].(float64)
+			if score == 0 {
+				score, _ = src["relevance"].(float64)
+			}
 			if name != "" {
-				if relevance > 0 {
-					sourceNames = append(sourceNames, fmt.Sprintf("%s (%.0f%%)", name, relevance*100))
+				if score > 0 {
+					sourceNames = append(sourceNames, fmt.Sprintf("%s (%.0f%%)", name, score*100))
 				} else {
 					sourceNames = append(sourceNames, name)
 				}
