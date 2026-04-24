@@ -177,8 +177,9 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 	rawInsights, _ := contextResult["insights"].([]any)
 
 	type graphDoc struct {
-		name  string
-		paths []string
+		name    string
+		paths   []string
+		summary string
 	}
 	var graphDocs []graphDoc
 	graphSet := map[string]bool{}
@@ -197,7 +198,8 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 				}
 			}
 		}
-		graphDocs = append(graphDocs, graphDoc{name: name, paths: pathList})
+		summary, _ := src["summary"].(string)
+		graphDocs = append(graphDocs, graphDoc{name: name, paths: pathList, summary: summary})
 	}
 
 	if len(graphDocs) == 0 {
@@ -219,6 +221,13 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 				dim(badge),
 				extra,
 			)
+			// Summary truncado em 1 linha, recuado, dim
+			if sum := strings.TrimSpace(d.summary); sum != "" {
+				if len(sum) > 140 {
+					sum = sum[:140] + "..."
+				}
+				fmt.Fprintf(w, "  │       %s\n", dim(sum))
+			}
 		}
 	}
 
