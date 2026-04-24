@@ -126,7 +126,9 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 	fmt.Fprintf(w, "  │  %s\n", dim("Vector similarity only — flat list, no relationships"))
 	fmt.Fprintln(w, "  │")
 
-	ragResult, ragErr := client.Search(question, ns, 10)
+	// Top-5 e o default convencional pra naive RAG (1-chunk-per-doc, vector only).
+	const naiveLimit = 5
+	ragResult, ragErr := client.Search(question, ns, naiveLimit)
 	var naiveDocs []string
 	naiveSet := map[string]bool{}
 	if ragErr != nil {
@@ -150,7 +152,7 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 				naiveDocs = append(naiveDocs, name)
 			}
 			for i, name := range naiveDocs {
-				fmt.Fprintf(w, "  │   %s %s\n", dim(fmt.Sprintf("%2d.", i+1)), white(shortenPath(name)))
+				fmt.Fprintf(w, "  │   %s %s %s\n", dim(fmt.Sprintf("%2d.", i+1)), white(shortenPath(name)), dim("[vector]"))
 			}
 		}
 	}
@@ -174,7 +176,11 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 	rawSources, _ := contextResult["sources"].([]any)
 	rawInsights, _ := contextResult["insights"].([]any)
 
-	var graphDocs []string
+	type graphDoc struct {
+		name  string
+		paths []string
+	}
+	var graphDocs []graphDoc
 	graphSet := map[string]bool{}
 	for _, s := range rawSources {
 		src, _ := s.(map[string]any)
@@ -183,18 +189,36 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 			continue
 		}
 		graphSet[name] = true
-		graphDocs = append(graphDocs, name)
+		pathList := []string{}
+		if arr, ok := src["paths"].([]any); ok {
+			for _, p := range arr {
+				if ps, _ := p.(string); ps != "" {
+					pathList = append(pathList, ps)
+				}
+			}
+		}
+		graphDocs = append(graphDocs, graphDoc{name: name, paths: pathList})
 	}
 
 	if len(graphDocs) == 0 {
 		fmt.Fprintln(w, "  │  (no context found)")
 	} else {
-		for i, name := range graphDocs {
-			badge := ""
-			if !naiveSet[name] {
-				badge = " " + green("[+ only in GraphRAG]")
+		for i, d := range graphDocs {
+			pathLabel := strings.Join(d.paths, "+")
+			if pathLabel == "" {
+				pathLabel = "?"
 			}
-			fmt.Fprintf(w, "  │   %s %s%s\n", dim(fmt.Sprintf("%2d.", i+1)), white(shortenPath(name)), badge)
+			badge := fmt.Sprintf("[%s]", pathLabel)
+			extra := ""
+			if !naiveSet[d.name] {
+				extra = " " + green("← only in GraphRAG")
+			}
+			fmt.Fprintf(w, "  │   %s %s %s%s\n",
+				dim(fmt.Sprintf("%2d.", i+1)),
+				white(shortenPath(d.name)),
+				dim(badge),
+				extra,
+			)
 		}
 	}
 
@@ -229,24 +253,33 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 
 	// --- Delta summary ---
 	extraDocs := 0
-	for _, name := range graphDocs {
-		if !naiveSet[name] {
+	multiPathDocs := 0
+	for _, d := range graphDocs {
+		if !naiveSet[d.name] {
 			extraDocs++
+		}
+		if len(d.paths) > 1 {
+			multiPathDocs++
 		}
 	}
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, gray("  ════════════════════════════════════════════════════════"))
-	if extraDocs > 0 || graphConns > 0 {
-		fmt.Fprintf(w, "  %s %s\n", green("✓"), bold("GraphRAG caught more than NAIVE:"))
-		if extraDocs > 0 {
-			fmt.Fprintf(w, "    %s %s\n", green("+"), bold(fmt.Sprintf("%d documents", extraDocs))+dim(" that naive RAG missed"))
-		}
-		if graphConns > 0 {
-			fmt.Fprintf(w, "    %s %s\n", green("+"), bold(fmt.Sprintf("%d entity relationships", graphConns))+dim(" (cross-document context)"))
-		}
-	} else {
-		fmt.Fprintf(w, "  %s\n", yellow("Both returned the same docs; no graph-only discoveries for this query."))
-		fmt.Fprintf(w, "  %s\n", dim("Try queries that mention specific entities (e.g. product names, events)."))
+	fmt.Fprintf(w, "  %s %s\n", green("✓"), bold("GraphRAG advantage:"))
+	if extraDocs > 0 {
+		fmt.Fprintf(w, "    %s %s\n", green("+"), bold(fmt.Sprintf("%d documents", extraDocs))+dim(" beyond NAIVE's top results"))
+	}
+	if multiPathDocs > 0 {
+		fmt.Fprintf(w, "    %s %s\n", green("+"),
+			bold(fmt.Sprintf("%d documents confirmed via multiple signals", multiPathDocs))+
+				dim(" (vector + BM25 or graph)"))
+	}
+	if graphConns > 0 {
+		fmt.Fprintf(w, "    %s %s\n", green("+"),
+			bold(fmt.Sprintf("%d cross-document relationships", graphConns))+
+				dim(" from the knowledge graph"))
+	}
+	if extraDocs == 0 && multiPathDocs == 0 && graphConns == 0 {
+		fmt.Fprintf(w, "    %s\n", dim("No significant delta for this query — try one mentioning specific entities."))
 	}
 	fmt.Fprintln(w, "")
 
