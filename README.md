@@ -151,6 +151,7 @@ Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.
 | `mindex context <question>` | **Retrieve context from your knowledge base (GraphRAG)** |
 | `mindex search <query>` | Semantic search across documents |
 | `mindex get <key>` | Read the full content of a document |
+| `mindex related <key>` | Find documents related via shared entities |
 | `mindex upload <file>` | Upload documents (PDF, Word, Markdown, and more) |
 | `mindex list` | List documents in a namespace |
 | `mindex delete <doc>` | Delete a document |
