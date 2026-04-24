@@ -168,111 +168,95 @@ func runCompare(cmd *cobra.Command, client *api.Client, question, ns string) err
 		return nil
 	}
 
+	// v2 ContextResponse shape:
+	//   sources: [{filename, score, paths: ["vector"|"bm25"|"graph"], heading, snippet}]
+	//   insights: [{subject, predicate, object, confidence, source:"graph"}]
+	//   path_mix: {vector, bm25, graph}
 	rawSources, _ := contextResult["sources"].([]any)
-	rawConnections, _ := contextResult["graph_connections"].([]any)
-	rawStats, _ := contextResult["stats"].(map[string]any)
+	rawInsights, _ := contextResult["insights"].([]any)
+	rawPathMix, _ := contextResult["path_mix"].(map[string]any)
 
-	// Sources with relevance and relationship type
 	if len(rawSources) == 0 {
 		fmt.Fprintln(w, "  │  (no context found)")
 	} else {
-		// Separate direct hits from graph-discovered
+		// Direct = docs encontrados via vector ou bm25; Graph-only = so graph path.
 		var directHits []map[string]any
 		var graphDiscovered []map[string]any
 		for _, s := range rawSources {
 			src, _ := s.(map[string]any)
-			rel, _ := src["relationship"].(string)
-			if rel == "" {
+			paths, _ := src["paths"].([]any)
+			viaVectorOrBm25 := false
+			for _, p := range paths {
+				if ps, _ := p.(string); ps == "vector" || ps == "bm25" {
+					viaVectorOrBm25 = true
+					break
+				}
+			}
+			if viaVectorOrBm25 {
 				directHits = append(directHits, src)
 			} else {
 				graphDiscovered = append(graphDiscovered, src)
 			}
 		}
 
-		// Direct hits (from vector search)
 		if len(directHits) > 0 {
-			fmt.Fprintf(w, "  │  %s\n", bold("◆ Direct matches (semantic search)"))
+			fmt.Fprintf(w, "  │  %s\n", bold("◆ Direct matches (vector + BM25)"))
 			for _, src := range directHits {
 				name, _ := src["filename"].(string)
-				relevance, _ := src["relevance"].(float64)
-				bar := renderBar(relevance, 20)
-				fmt.Fprintf(w, "  │    %s %s %s\n", green(bar), white(shortenPath(name)), dim(fmt.Sprintf("%.0f%%", relevance*100)))
+				score, _ := src["score"].(float64)
+				bar := renderBar(score, 20)
+				fmt.Fprintf(w, "  │    %s %s %s\n", green(bar), white(shortenPath(name)), dim(fmt.Sprintf("%.0f%%", score*100)))
 			}
 		}
 
-		// Graph-discovered documents
 		if len(graphDiscovered) > 0 {
 			fmt.Fprintln(w, "  │")
 			fmt.Fprintf(w, "  │  %s\n", bold("◇ Discovered via knowledge graph"))
 			for _, src := range graphDiscovered {
 				name, _ := src["filename"].(string)
-				rel, _ := src["relationship"].(string)
-				fmt.Fprintf(w, "  │    ╰─ %s  ← %s\n", cyan(shortenPath(name)), magenta(formatRelType(rel)))
+				fmt.Fprintf(w, "  │    ╰─ %s\n", cyan(shortenPath(name)))
 			}
 		}
 	}
 
-	// Graph connections visualization
-	if len(rawConnections) > 0 {
+	// Cross-doc insights (entity triples from graph traversal)
+	graphConns := len(rawInsights)
+	if graphConns > 0 {
 		fmt.Fprintln(w, "  │")
-		fmt.Fprintf(w, "  │  %s\n", bold("◈ Document relationships"))
+		fmt.Fprintf(w, "  │  %s\n", bold("◈ Graph insights (entity triples)"))
 		fmt.Fprintln(w, "  │")
-
-		// Deduplicate connections by source-target pair
-		type connKey struct{ src, tgt string }
-		seen := map[connKey]bool{}
-
-		for _, c := range rawConnections {
-			conn, _ := c.(map[string]any)
-			source, _ := conn["source"].(string)
-			target, _ := conn["target"].(string)
-			relType, _ := conn["rel_type"].(string)
-			score, _ := conn["similarity_score"].(float64)
-			justification, _ := conn["justification"].(string)
-
-			if source == "" || target == "" {
+		type insightKey struct{ s, p, o string }
+		seen := map[insightKey]bool{}
+		for _, ins := range rawInsights {
+			m, _ := ins.(map[string]any)
+			subj, _ := m["subject"].(string)
+			pred, _ := m["predicate"].(string)
+			obj, _ := m["object"].(string)
+			conf, _ := m["confidence"].(float64)
+			if subj == "" || pred == "" || obj == "" {
 				continue
 			}
-			key := connKey{source, target}
-			if seen[key] {
+			k := insightKey{subj, pred, obj}
+			if seen[k] {
 				continue
 			}
-			seen[key] = true
-
-			arrow := formatArrow(relType)
-			srcShort := shortenPath(source)
-			tgtShort := shortenPath(target)
-
-			if score > 0 {
-				fmt.Fprintf(w, "  │    %s %s %s  %s\n", cyan(srcShort), magenta(arrow), cyan(tgtShort), dim(fmt.Sprintf("%.0f%%", score*100)))
+			seen[k] = true
+			arrow := formatArrow(pred)
+			if conf > 0 {
+				fmt.Fprintf(w, "  │    %s %s %s  %s\n", cyan(subj), magenta(arrow), cyan(obj), dim(fmt.Sprintf("%.0f%%", conf*100)))
 			} else {
-				fmt.Fprintf(w, "  │    %s %s %s\n", cyan(srcShort), magenta(arrow), cyan(tgtShort))
-			}
-			if justification != "" {
-				if len(justification) > 80 {
-					justification = justification[:80] + "..."
-				}
-				fmt.Fprintf(w, "  │      %s\n", dim(justification))
+				fmt.Fprintf(w, "  │    %s %s %s\n", cyan(subj), magenta(arrow), cyan(obj))
 			}
 		}
 	}
 
-	// Stats
+	// Stats do path_mix
 	fmt.Fprintln(w, "  │")
 	vectorChunks := 0
-	graphConns := 0
-	docsRead := 0
-	if rawStats != nil {
-		if v, ok := rawStats["vector_chunks"].(float64); ok {
-			vectorChunks = int(v)
-		}
-		if v, ok := rawStats["graph_connections"].(float64); ok {
-			graphConns = int(v)
-		}
-		if v, ok := rawStats["documents_read"].(float64); ok {
-			docsRead = int(v)
-		}
+	if v, ok := rawPathMix["vector"].(float64); ok {
+		vectorChunks = int(v)
 	}
+	docsRead := len(rawSources)
 	fmt.Fprintf(w, "  └─── %s\n", dim(fmt.Sprintf("%d chunks · %d connections · %d documents read", vectorChunks, graphConns, docsRead)))
 
 	// Summary
