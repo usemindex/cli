@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,10 @@ import (
 	"github.com/usemindex/cli/api"
 	"github.com/usemindex/cli/config"
 )
+
+// errPollTimedOut sinaliza que o upload em lote expirou aguardando o status das tarefas.
+// O chamador (Execute em root.go) deve mapear esse erro para exit code 2.
+var errPollTimedOut = errors.New("poll timed out")
 
 // extensões aceitas para upload
 var allowedExtensions = map[string]bool{
@@ -131,7 +136,7 @@ func runUpload(cmd *cobra.Command, args []string) error {
 		stillProcessing := totalFiles - succeeded - failed
 		fmt.Fprintf(out, "⚠ %d files still processing after %s — check later: mindex status <task_id>\n", stillProcessing, pollTimeout)
 		fmt.Fprintf(out, "  Active task IDs: %s\n", strings.Join(taskIDs, ", "))
-		os.Exit(2)
+		return errPollTimedOut
 	case pollCancelled:
 		fmt.Fprintf(out, "⚠ Cancelled. Uploads continue in background.\n")
 		fmt.Fprintf(out, "  Active task IDs: %s\n", strings.Join(taskIDs, ", "))
@@ -172,21 +177,21 @@ func pollTasks(ctx context.Context, client *api.Client, taskIDs []string, out io
 	for {
 		s, f, total, processed, allDone := aggregateTasks(client, taskIDs)
 		if !quiet {
-			fmt.Fprintf(os.Stdout, "\r  Processing... %d/%d", processed, total)
+			fmt.Fprintf(out, "\r  Processing... %d/%d", processed, total)
 		}
 		if allDone {
 			if !quiet {
-				fmt.Fprint(os.Stdout, "\n")
+				fmt.Fprint(out, "\n")
 			}
 			return s, f, pollDone
 		}
 		if time.Now().After(deadline) {
-			fmt.Fprint(os.Stdout, "\n")
+			fmt.Fprint(out, "\n")
 			return s, f, pollTimedOut
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Fprint(os.Stdout, "\n")
+			fmt.Fprint(out, "\n")
 			return s, f, pollCancelled
 		case <-ticker.C:
 		}
