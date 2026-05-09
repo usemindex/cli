@@ -234,6 +234,134 @@ func (c *Client) UploadFile(filePath, namespace string) (map[string]any, error) 
 	return result, nil
 }
 
+// BatchResponse é a resposta 202 do POST /documents (batch).
+type BatchResponse struct {
+	TaskID    string `json:"task_id"`
+	Status    string `json:"status"`
+	Total     int    `json:"total"`
+	Namespace string `json:"namespace"`
+}
+
+// TaskStatusResponse é a resposta do endpoint GET /documents/tasks/{task_id}.
+type TaskStatusResponse struct {
+	TaskID        string           `json:"task_id"`
+	Status        string           `json:"status"`
+	Phase         string           `json:"phase,omitempty"`
+	Total         int              `json:"total"`
+	Succeeded     int              `json:"succeeded"`
+	Failed        int              `json:"failed"`
+	Processed     int              `json:"processed"`
+	Namespace     string           `json:"namespace"`
+	Results       []map[string]any `json:"results,omitempty"`
+	EnqueueErrors []map[string]any `json:"enqueue_errors,omitempty"`
+}
+
+// UploadBatch faz upload de múltiplos arquivos numa única request multipart.
+// O servidor (API Rails) aceita até 50 arquivos por request.
+func (c *Client) UploadBatch(filePaths []string, namespace string) (*BatchResponse, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	for _, fp := range filePaths {
+		f, err := os.Open(fp)
+		if err != nil {
+			return nil, fmt.Errorf("erro ao abrir %s: %w", fp, err)
+		}
+		// Rails convention: name "files[]" → params[:files] array
+		part, err := writer.CreateFormFile("files[]", filepath.Base(fp))
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("erro ao criar form file: %w", err)
+		}
+		if _, err := io.Copy(part, f); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("erro ao copiar %s: %w", fp, err)
+		}
+		f.Close()
+	}
+	if namespace != "" {
+		writer.WriteField("namespace", namespace)
+	}
+	writer.Close()
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("%s/api/v1/%s/documents", c.BaseURL, c.OrgSlug),
+		&buf,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("erro na requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao ler resposta: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.Unmarshal(respBody, &errResp)
+		msg := ""
+		if m, ok := errResp["error"].(string); ok {
+			msg = m
+		}
+		return nil, &APIError{Status: resp.StatusCode, Message: msg}
+	}
+
+	var result BatchResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("erro ao deserializar resposta: %w", err)
+	}
+	return &result, nil
+}
+
+// TaskStatus consulta o status agregado de um batch de upload.
+func (c *Client) TaskStatus(taskID string) (*TaskStatusResponse, error) {
+	path := fmt.Sprintf("/api/v1/%s/documents/tasks/%s", c.OrgSlug, url.PathEscape(taskID))
+	req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("erro na requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao ler resposta: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.Unmarshal(respBody, &errResp)
+		msg := ""
+		if m, ok := errResp["error"].(string); ok {
+			msg = m
+		}
+		return nil, &APIError{Status: resp.StatusCode, Message: msg}
+	}
+
+	var result TaskStatusResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("erro ao deserializar resposta: %w", err)
+	}
+	return &result, nil
+}
+
 // ListNamespaces lista os namespaces da organização.
 func (c *Client) ListNamespaces() (map[string]any, error) {
 	return c.do(http.MethodGet, fmt.Sprintf("/api/v1/%s/namespaces", c.OrgSlug), nil)

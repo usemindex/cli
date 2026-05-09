@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -295,6 +298,122 @@ func TestRelatedDocumentsNoNamespace(t *testing.T) {
 	}
 	if result.Document != "slack.md" {
 		t.Errorf("document: obtido %q", result.Document)
+	}
+}
+
+func TestUploadBatch(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("método esperado POST, obtido %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/acme/documents" {
+			t.Fatalf("path inesperado: %s", r.URL.Path)
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			t.Fatalf("Content-Type inesperado: %s", r.Header.Get("Content-Type"))
+		}
+
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("erro parsing multipart: %v", err)
+		}
+		// Rails convention: form field "files[]" → params[:files] array
+		files := r.MultipartForm.File["files[]"]
+		if len(files) != 2 {
+			t.Fatalf("esperado 2 arquivos em files[], obtido %d", len(files))
+		}
+		if r.FormValue("namespace") != "docs" {
+			t.Fatalf("namespace esperado 'docs', obtido %q", r.FormValue("namespace"))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id":   "tid-abc",
+			"status":    "processing",
+			"total":     2,
+			"namespace": "docs",
+		})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	b := filepath.Join(tmp, "b.md")
+	if err := os.WriteFile(a, []byte("# A"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("# B"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	resp, err := c.UploadBatch([]string{a, b}, "docs")
+	if err != nil {
+		t.Fatalf("UploadBatch erro inesperado: %v", err)
+	}
+	if resp.TaskID != "tid-abc" {
+		t.Errorf("task_id: esperado %q, obtido %q", "tid-abc", resp.TaskID)
+	}
+	if resp.Total != 2 {
+		t.Errorf("total: esperado 2, obtido %d", resp.Total)
+	}
+}
+
+func TestUploadBatch429(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{"error": "Rate limit exceeded", "retry_after": 60})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	_, err := c.UploadBatch([]string{a}, "docs")
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("esperado *APIError, obtido %T", err)
+	}
+	if apiErr.Status != 429 {
+		t.Errorf("status: esperado 429, obtido %d", apiErr.Status)
+	}
+}
+
+func TestTaskStatus(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/acme/documents/tasks/tid-1" {
+			t.Fatalf("path inesperado: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id":   "tid-1",
+			"status":    "completed",
+			"total":     2,
+			"succeeded": 2,
+			"failed":    0,
+			"processed": 2,
+			"namespace": "docs",
+			"results":   []any{},
+		})
+	}))
+	defer servidor.Close()
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	resp, err := c.TaskStatus("tid-1")
+	if err != nil {
+		t.Fatalf("TaskStatus erro: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Errorf("status: esperado %q, obtido %q", "completed", resp.Status)
+	}
+	if resp.Succeeded != 2 {
+		t.Errorf("succeeded: esperado 2, obtido %d", resp.Succeeded)
 	}
 }
 

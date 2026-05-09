@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -50,8 +51,11 @@ func Execute() {
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		// usage errors exit with code 2 (Cobra convention)
+		// usage errors e poll timeout saem com código 2 (convenção Cobra)
 		if _, ok := err.(*usageError); ok {
+			os.Exit(2)
+		}
+		if errors.Is(err, errPollTimedOut) {
 			os.Exit(2)
 		}
 		os.Exit(1)

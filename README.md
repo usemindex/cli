@@ -134,15 +134,31 @@ mindex skills update                # Update installed skills
 
 ## Upload
 
-Supports multiple formats and batch upload:
+Bulk upload sends up to 50 files per HTTP request (instead of one request per file), so a thousand-file upload finishes in seconds and stays well under per-org rate limits.
 
 ```bash
 mindex upload README.md
 mindex upload *.pdf -n docs
 mindex upload src/ --recursive
+mindex upload **/*.md -n knowledge-base    # 1000+ files just works
 ```
 
-Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.json`, `.xml`
+What you'll see:
+
+```
+Uploading 115 files in 3 batches...
+  ✓ Batch 1/3 enqueued (50 files)
+  ✓ Batch 2/3 enqueued (50 files)
+  ✓ Batch 3/3 enqueued (15 files)
+  Processing... 110/115
+Done: 115 indexed, 0 failed (12.4s)
+```
+
+Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.json`, `.xml`. Max 10 MB per file.
+
+If a single file fails validation (unsupported type, exceeds 10 MB, invalid encoding), **the whole batch is rejected** with no files uploaded — atomic by design. Storage cota is also checked atomically across the batch; if the total exceeds your plan, the upload is cancelled with a clear error before anything is sent.
+
+Press `Ctrl+C` while files are processing — uploads continue in the background; you can re-poll later with `mindex status <task_id>`.
 
 ## Commands
 
