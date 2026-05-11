@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -45,6 +46,7 @@ const (
 )
 
 var uploadRecursive bool
+var uploadOverwrite bool
 
 var uploadCmd = &cobra.Command{
 	Use:   "upload <files...>",
@@ -58,13 +60,15 @@ Supports globs and, with --recursive, entire directories.
     mindex upload doc.md
     mindex upload docs/*.md
     mindex upload ./docs --recursive
-    mindex upload a.md b.md --namespace backend`,
+    mindex upload a.md b.md --namespace backend
+    mindex upload **/*.md --namespace docs --overwrite`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runUpload,
 }
 
 func init() {
 	uploadCmd.Flags().BoolVarP(&uploadRecursive, "recursive", "r", false, "Include subdirectories recursively")
+	uploadCmd.Flags().BoolVar(&uploadOverwrite, "overwrite", false, "Overwrite existing documents instead of skipping")
 	rootCmd.AddCommand(uploadCmd)
 }
 
@@ -94,7 +98,7 @@ func runUpload(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	chunks := chunkFiles(files, batchSize)
+	chunks := chunkUploadFiles(files, batchSize)
 	out := cmd.OutOrStdout()
 	if !quiet {
 		fmt.Fprintf(out, "Uploading %d files in %d batches...\n", len(files), len(chunks))
@@ -102,9 +106,11 @@ func runUpload(cmd *cobra.Command, args []string) error {
 
 	startedAt := time.Now()
 	taskIDs := []string{}
+	allSkipped := []string{}
 
 	for i, chunk := range chunks {
-		resp, err := client.UploadBatch(chunk, ns)
+		resp, skipped, err := uploadBatchWithSkip(client, chunk, ns, uploadOverwrite)
+		allSkipped = append(allSkipped, skipped...)
 		if err != nil {
 			if apiErr, ok := err.(*api.APIError); ok && apiErr.Status == 402 {
 				fmt.Fprintf(out, "  ✗ Batch %d/%d: storage limit reached. Cancelling remaining batches.\n", i+1, len(chunks))
@@ -114,15 +120,29 @@ func runUpload(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if !quiet {
-			fmt.Fprintf(out, "  ✓ Batch %d/%d enqueued (%d files)\n", i+1, len(chunks), len(chunk))
+			uploaded := len(chunk) - len(skipped)
+			msg := fmt.Sprintf("  ✓ Batch %d/%d enqueued (%d files", i+1, len(chunks), uploaded)
+			if len(skipped) > 0 {
+				msg += fmt.Sprintf(", %d skipped (already exist)", len(skipped))
+			}
+			msg += ")\n"
+			fmt.Fprint(out, msg)
 		}
-		taskIDs = append(taskIDs, resp.TaskID)
+		if resp.TaskID != "" {
+			taskIDs = append(taskIDs, resp.TaskID)
+		}
+	}
+
+	// Se todos os arquivos foram pulados (sem tasks para aguardar), encerra aqui.
+	if len(taskIDs) == 0 {
+		printSkippedSummary(out, allSkipped, uploadOverwrite)
+		return nil
 	}
 
 	ctx, cancel := signalCtx()
 	defer cancel()
 
-	totalFiles := len(files)
+	totalFiles := len(files) - len(allSkipped)
 	succeeded, failed, status := pollTasks(ctx, client, taskIDs, out)
 
 	elapsed := time.Since(startedAt)
@@ -136,15 +156,152 @@ func runUpload(cmd *cobra.Command, args []string) error {
 		stillProcessing := totalFiles - succeeded - failed
 		fmt.Fprintf(out, "⚠ %d files still processing after %s — check later: mindex status <task_id>\n", stillProcessing, pollTimeout)
 		fmt.Fprintf(out, "  Active task IDs: %s\n", strings.Join(taskIDs, ", "))
+		printSkippedSummary(out, allSkipped, uploadOverwrite)
 		return errPollTimedOut
 	case pollCancelled:
 		fmt.Fprintf(out, "⚠ Cancelled. Uploads continue in background.\n")
 		fmt.Fprintf(out, "  Active task IDs: %s\n", strings.Join(taskIDs, ", "))
 	}
+
+	printSkippedSummary(out, allSkipped, uploadOverwrite)
 	return nil
 }
 
-// chunkFiles divide um slice de arquivos em sub-slices de até `size` elementos.
+// printSkippedSummary exibe um resumo dos arquivos pulados por colisão, se houver.
+func printSkippedSummary(out io.Writer, skipped []string, overwrite bool) {
+	if len(skipped) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "%d file(s) skipped (already in namespace):\n", len(skipped))
+	limit := 5
+	if len(skipped) < limit {
+		limit = len(skipped)
+	}
+	for _, k := range skipped[:limit] {
+		fmt.Fprintf(out, "  - %s\n", k)
+	}
+	if len(skipped) > 5 {
+		fmt.Fprintf(out, "  ... and %d more\n", len(skipped)-5)
+	}
+	if !overwrite {
+		fmt.Fprintf(out, "Use --overwrite to replace existing documents.\n")
+	}
+}
+
+// uploadBatchWithSkip envia um batch para o servidor. Quando o servidor retorna
+// 409 (documento já existe), remove o arquivo conflitante da lista e retenta.
+// O loop continua até sucesso ou até a lista ficar vazia.
+// Retorna a resposta final, a lista de chaves puladas e um erro se aplicável.
+func uploadBatchWithSkip(client *api.Client, files []api.UploadFile, namespace string, overwrite bool) (*api.BatchResponse, []string, error) {
+	skipped := []string{}
+	current := make([]api.UploadFile, len(files))
+	copy(current, files)
+
+	for len(current) > 0 {
+		resp, err := client.UploadBatch(current, namespace, overwrite)
+		if err == nil {
+			return resp, skipped, nil
+		}
+
+		apiErr, ok := err.(*api.APIError)
+		if !ok || apiErr.Status != 409 {
+			// Erro que não é colisão — propaga direto.
+			return nil, skipped, err
+		}
+
+		// Identifica a chave colidindo e remove do batch para retentar.
+		collidingKey := extractCollidingKey(apiErr.Message)
+		if collidingKey == "" {
+			// Não conseguiu parsear a chave — não há como resolver, propaga.
+			return nil, skipped, err
+		}
+
+		next := make([]api.UploadFile, 0, len(current)-1)
+		removed := false
+		for _, f := range current {
+			// O servidor retorna a chave no formato "namespace/relpath".
+			// Comparamos com as variantes possíveis para garantir o match.
+			wanted := namespace + "/" + f.UploadKey
+			if !removed && (wanted == collidingKey ||
+				f.UploadKey == collidingKey ||
+				strings.HasSuffix(collidingKey, "/"+f.UploadKey)) {
+				skipped = append(skipped, f.UploadKey)
+				removed = true
+				continue
+			}
+			next = append(next, f)
+		}
+
+		if !removed {
+			// Segurança: evita loop infinito se não conseguiu remover nada.
+			return nil, skipped, err
+		}
+		current = next
+	}
+
+	// Todos os arquivos do batch foram pulados — retorna resposta sintética vazia.
+	return &api.BatchResponse{
+		TaskID:    "",
+		Status:    "skipped",
+		Total:     0,
+		Namespace: namespace,
+	}, skipped, nil
+}
+
+// rexCollidingKey extrai o valor de "key" de mensagens de erro 409 do engine.
+// O servidor retorna: "Engine retornou 409: {"detail":{"code":"DOCUMENT_EXISTS","key":"...","message":"..."}}"
+var rexCollidingKey = regexp.MustCompile(`"key"\s*:\s*"([^"]+)"`)
+
+// extractCollidingKey parseia a chave do documento colidindo da mensagem de erro.
+func extractCollidingKey(message string) string {
+	matches := rexCollidingKey.FindStringSubmatch(message)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
+}
+
+// uploadKey computa a chave de upload para um arquivo a partir do seu caminho local.
+// Preserva o subpath relativo para evitar colisões de basename entre arquivos em
+// diretórios diferentes.
+//
+//   - Caminhos relativos: limpa e remove "./" inicial  → "payments/intro.md"
+//   - Caminhos absolutos dentro do cwd: converte para relativo   → "payments/intro.md"
+//   - Caminhos absolutos fora do cwd (contêm ".."): usa basename → "intro.md"
+func uploadKey(localPath string) string {
+	clean := filepath.Clean(localPath)
+	// Remove "./" inicial de caminhos relativos.
+	clean = strings.TrimPrefix(clean, "./")
+	if filepath.IsAbs(clean) {
+		if cwd, err := os.Getwd(); err == nil {
+			if rel, err := filepath.Rel(cwd, clean); err == nil && !strings.HasPrefix(rel, "..") {
+				return rel
+			}
+		}
+		// Fallback: apenas o basename quando o arquivo está fora do cwd.
+		return filepath.Base(clean)
+	}
+	return clean
+}
+
+// chunkUploadFiles divide um slice de UploadFile em sub-slices de até `size` elementos.
+func chunkUploadFiles(files []api.UploadFile, size int) [][]api.UploadFile {
+	if len(files) == 0 || size <= 0 {
+		return [][]api.UploadFile{}
+	}
+	var chunks [][]api.UploadFile
+	for i := 0; i < len(files); i += size {
+		end := i + size
+		if end > len(files) {
+			end = len(files)
+		}
+		chunks = append(chunks, files[i:end])
+	}
+	return chunks
+}
+
+// chunkFiles divide um slice de strings em sub-slices de até `size` elementos.
+// Mantida para compatibilidade com testes existentes.
 func chunkFiles(files []string, size int) [][]string {
 	if len(files) == 0 || size <= 0 {
 		return [][]string{}
@@ -231,10 +388,11 @@ func signalCtx() (context.Context, context.CancelFunc) {
 }
 
 // resolveFiles expande globs, diretórios (se recursive) e filtra por extensão.
-// Retorna os arquivos ordenados alfabeticamente para chunking determinístico.
-func resolveFiles(patterns []string, recursive bool) ([]string, error) {
+// Retorna UploadFile com localPath e uploadKey computados, ordenados alfabeticamente
+// pela uploadKey para chunking determinístico.
+func resolveFiles(patterns []string, recursive bool) ([]api.UploadFile, error) {
 	seen := map[string]bool{}
-	var result []string
+	var result []api.UploadFile
 
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(pattern)
@@ -264,7 +422,10 @@ func resolveFiles(patterns []string, recursive bool) ([]string, error) {
 					}
 					if isAllowedExtension(path) && !seen[path] {
 						seen[path] = true
-						result = append(result, path)
+						result = append(result, api.UploadFile{
+							Path:      path,
+							UploadKey: uploadKey(path),
+						})
 					}
 					return nil
 				})
@@ -274,13 +435,18 @@ func resolveFiles(patterns []string, recursive bool) ([]string, error) {
 			} else {
 				if isAllowedExtension(match) && !seen[match] {
 					seen[match] = true
-					result = append(result, match)
+					result = append(result, api.UploadFile{
+						Path:      match,
+						UploadKey: uploadKey(match),
+					})
 				}
 			}
 		}
 	}
 
-	sort.Strings(result)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].UploadKey < result[j].UploadKey
+	})
 	return result, nil
 }
 

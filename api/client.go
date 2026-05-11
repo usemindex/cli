@@ -329,6 +329,13 @@ func (c *Client) UploadFile(filePath, namespace string) (map[string]any, error) 
 	return result, nil
 }
 
+// UploadFile representa um arquivo a ser enviado em batch, com seu caminho local
+// e a chave de upload (nome preservado no multipart, podendo incluir subpath).
+type UploadFile struct {
+	Path      string // caminho local no disco (para abrir o arquivo)
+	UploadKey string // nome enviado no form multipart (preserva hierarquia relativa)
+}
+
 // BatchResponse é a resposta 202 do POST /documents (batch).
 type BatchResponse struct {
 	TaskID    string `json:"task_id"`
@@ -353,33 +360,43 @@ type TaskStatusResponse struct {
 
 // UploadBatch faz upload de múltiplos arquivos numa única request multipart.
 // O servidor (API Rails) aceita até 50 arquivos por request.
+// Cada arquivo em files carrega o caminho local (Path) e a chave de upload
+// (UploadKey), que preserva o subpath relativo para evitar colisões de nome.
+// Quando overwrite=true, envia o campo "overwrite=true" no form, instruindo
+// o engine a substituir documentos existentes sem retornar 409.
 // Em caso de 429 ou 5xx, retenta automaticamente com backoff.
-func (c *Client) UploadBatch(filePaths []string, namespace string) (*BatchResponse, error) {
+func (c *Client) UploadBatch(files []UploadFile, namespace string, overwrite bool) (*BatchResponse, error) {
 	// reqFactory reconstrói o multipart body a cada tentativa, pois o body é
 	// consumido na request anterior e não pode ser reutilizado diretamente.
 	reqFactory := func() (*http.Request, error) {
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
 
-		for _, fp := range filePaths {
-			f, err := os.Open(fp)
+		for _, uf := range files {
+			f, err := os.Open(uf.Path)
 			if err != nil {
-				return nil, fmt.Errorf("erro ao abrir %s: %w", fp, err)
+				return nil, fmt.Errorf("erro ao abrir %s: %w", uf.Path, err)
 			}
-			// Rails convention: name "files[]" → params[:files] array
-			part, err := writer.CreateFormFile("files[]", filepath.Base(fp))
+			// Rails convention: name "files[]" → params[:files] array.
+			// UploadKey preserva o subpath relativo (ex: "payments/intro.md")
+			// para evitar colisões quando arquivos de subdiretórios diferentes
+			// têm o mesmo basename.
+			part, err := writer.CreateFormFile("files[]", uf.UploadKey)
 			if err != nil {
 				f.Close()
 				return nil, fmt.Errorf("erro ao criar form file: %w", err)
 			}
 			if _, err := io.Copy(part, f); err != nil {
 				f.Close()
-				return nil, fmt.Errorf("erro ao copiar %s: %w", fp, err)
+				return nil, fmt.Errorf("erro ao copiar %s: %w", uf.Path, err)
 			}
 			f.Close()
 		}
 		if namespace != "" {
 			writer.WriteField("namespace", namespace)
+		}
+		if overwrite {
+			writer.WriteField("overwrite", "true")
 		}
 		writer.Close()
 
