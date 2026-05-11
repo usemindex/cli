@@ -156,9 +156,53 @@ Done: 115 indexed, 0 failed (12.4s)
 
 Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.csv`, `.json`, `.xml`. Max 10 MB per file.
 
-If a single file fails validation (unsupported type, exceeds 10 MB, invalid encoding), **the whole batch is rejected** with no files uploaded — atomic by design. Storage cota is also checked atomically across the batch; if the total exceeds your plan, the upload is cancelled with a clear error before anything is sent.
+If a single file fails validation (unsupported type, exceeds 10 MB, invalid encoding), **the whole batch is rejected** with no files uploaded — atomic by design. Document count is checked atomically across the batch; if the total would exceed your plan's limit, the upload is cancelled with a clear error before anything is sent.
 
 Press `Ctrl+C` while files are processing — uploads continue in the background; you can re-poll later with `mindex status <task_id>`.
+
+See [Plan limits](#plan-limits) for the full breakdown of per-plan document count and per-file markdown caps.
+
+## Plan limits
+
+Mindex enforces two independent size limits on every upload:
+
+| Plan | Max documents | Max markdown per document | Max raw file |
+|------|---------------|---------------------------|--------------|
+| Free | 100 | 30 KB | 10 MB |
+| Personal | 5,000 | 150 KB | 10 MB |
+| Team | 15,000 | 300 KB | 10 MB |
+| Enterprise | Tailored | Tailored | 10 MB |
+
+For Enterprise plans, all limits are negotiated individually — [contact us](mailto:support@usemindex.dev).
+
+### Why two size limits?
+
+We convert every file (PDF, DOCX, etc.) to markdown before processing. The **raw** file size protects against catastrophic uploads. The **markdown** size — the actual cost driver — is what the plan limits. A 5 MB PDF might produce only 100 KB of markdown text; a 5 MB plain `.md` file is 5 MB of markdown.
+
+If you're hitting the markdown cap with `.md` uploads, consider splitting documents into smaller logical units (chapters, sections).
+
+## Errors you might see
+
+| Error | What it means | What to do |
+|-------|---------------|------------|
+| `MARKDOWN_TOO_LARGE` | A document's converted markdown exceeds your plan's per-doc limit | Split the doc into smaller files, or upgrade your plan |
+| `DOCUMENT_EXISTS` | A doc with the same key already exists in this namespace | Use `--overwrite` to replace, or upload to a different namespace |
+| `402 Document limit reached` | You hit your plan's document count cap | Delete some docs or upgrade |
+| `429 Rate limited` | Per-minute request cap hit | The CLI retries automatically — just wait |
+| `413 Payload too large` | Single-file upload exceeded plan markdown limit | Split or upgrade |
+
+When a batch contains some failing files, the CLI continues with the rest and shows a grouped summary at the end. No need to re-run the whole upload.
+
+## Checking your usage
+
+```bash
+# Via dashboard
+open https://usemindex.dev/orgs/<your-org-slug>/settings/billing
+
+# Via API (shows current doc count, max, and all limits)
+curl -H "Authorization: $MINDEX_API_KEY" \
+  https://api.usemindex.dev/orgs/<your-org-slug>/billing/subscription
+```
 
 ## Commands
 
