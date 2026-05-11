@@ -432,6 +432,12 @@ func (c *Client) UploadBatch(files []UploadFile, namespace string, overwrite boo
 		msg := ""
 		if m, ok := errResp["error"].(string); ok {
 			msg = m
+		} else if m, ok := errResp["message"].(string); ok {
+			msg = m
+		} else if d, ok := errResp["detail"].(map[string]any); ok {
+			if m, ok := d["message"].(string); ok {
+				msg = m
+			}
 		}
 		return nil, &APIError{Status: resp.StatusCode, Message: msg}
 	}

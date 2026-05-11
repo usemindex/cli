@@ -116,6 +116,11 @@ func runUpload(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(out, "  ✗ Batch %d/%d: storage limit reached. Cancelling remaining batches.\n", i+1, len(chunks))
 				return fmt.Errorf("storage limit reached")
 			}
+			if apiErr, ok := err.(*api.APIError); ok && apiErr.Status == 413 {
+				fmt.Fprintf(out, "  ✗ Batch %d/%d: document too large. %s\n", i+1, len(chunks), apiErr.Message)
+				fmt.Fprintln(out, "    → Split the document or upgrade your plan.")
+				return err
+			}
 			fmt.Fprintf(out, "  ✗ Batch %d/%d failed: %s\n", i+1, len(chunks), err)
 			return err
 		}
@@ -143,14 +148,15 @@ func runUpload(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	totalFiles := len(files) - len(allSkipped)
-	succeeded, failed, status := pollTasks(ctx, client, taskIDs, out)
+	succeeded, failed, enqueueErrors, status := pollTasks(ctx, client, taskIDs, out)
 
 	elapsed := time.Since(startedAt)
 	switch status {
 	case pollDone:
 		fmt.Fprintf(out, "Done: %d indexed, %d failed (%.1fs)\n", succeeded, failed, elapsed.Seconds())
-		if failed > 0 {
-			return fmt.Errorf("%d file(s) failed", failed)
+		printEnqueueErrors(out, enqueueErrors)
+		if failed > 0 || len(enqueueErrors) > 0 {
+			return fmt.Errorf("%d file(s) failed", failed+len(enqueueErrors))
 		}
 	case pollTimedOut:
 		stillProcessing := totalFiles - succeeded - failed
@@ -326,13 +332,14 @@ const (
 )
 
 // pollTasks aguarda todos os taskIDs completarem, exibindo progresso ao usuário.
-func pollTasks(ctx context.Context, client *api.Client, taskIDs []string, out io.Writer) (succeeded, failed int, result pollResult) {
+// Retorna também os erros de enfileiramento (enqueue_errors) agregados de todas as tarefas.
+func pollTasks(ctx context.Context, client *api.Client, taskIDs []string, out io.Writer) (succeeded, failed int, enqueueErrors []map[string]any, result pollResult) {
 	deadline := time.Now().Add(pollTimeout)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
-		s, f, total, processed, allDone := aggregateTasks(client, taskIDs)
+		s, f, total, processed, errs, allDone := aggregateTasks(client, taskIDs)
 		if !quiet {
 			fmt.Fprintf(out, "\r  Processing... %d/%d", processed, total)
 		}
@@ -340,23 +347,24 @@ func pollTasks(ctx context.Context, client *api.Client, taskIDs []string, out io
 			if !quiet {
 				fmt.Fprint(out, "\n")
 			}
-			return s, f, pollDone
+			return s, f, errs, pollDone
 		}
 		if time.Now().After(deadline) {
 			fmt.Fprint(out, "\n")
-			return s, f, pollTimedOut
+			return s, f, errs, pollTimedOut
 		}
 		select {
 		case <-ctx.Done():
 			fmt.Fprint(out, "\n")
-			return s, f, pollCancelled
+			return s, f, errs, pollCancelled
 		case <-ticker.C:
 		}
 	}
 }
 
 // aggregateTasks agrega o status de todos os tasks num único conjunto de contadores.
-func aggregateTasks(client *api.Client, taskIDs []string) (succeeded, failed, total, processed int, allDone bool) {
+// Também coleta os enqueue_errors de cada tarefa concluída.
+func aggregateTasks(client *api.Client, taskIDs []string) (succeeded, failed, total, processed int, enqueueErrors []map[string]any, allDone bool) {
 	allDone = true
 	for _, tid := range taskIDs {
 		resp, err := client.TaskStatus(tid)
@@ -368,11 +376,75 @@ func aggregateTasks(client *api.Client, taskIDs []string) (succeeded, failed, to
 		failed += resp.Failed
 		total += resp.Total
 		processed += resp.Processed
+		enqueueErrors = append(enqueueErrors, resp.EnqueueErrors...)
 		if resp.Status == "processing" {
 			allDone = false
 		}
 	}
 	return
+}
+
+// printEnqueueErrors exibe um resumo agrupado dos erros de enfileiramento.
+func printEnqueueErrors(out io.Writer, errors []map[string]any) {
+	if len(errors) == 0 {
+		return
+	}
+	// Agrupa por código de erro.
+	byCode := make(map[string][]map[string]any)
+	for _, e := range errors {
+		code, _ := e["code"].(string)
+		if code == "" {
+			code = "UNKNOWN"
+		}
+		byCode[code] = append(byCode[code], e)
+	}
+
+	fmt.Fprintln(out, "")
+	fmt.Fprintf(out, "%d file(s) were not enriched:\n", len(errors))
+
+	for code, items := range byCode {
+		limit := min(5, len(items))
+		switch code {
+		case "MARKDOWN_TOO_LARGE":
+			fmt.Fprintf(out, "\n  %d file(s) exceeded the per-document markdown size limit:\n", len(items))
+			for _, item := range items[:limit] {
+				key, _ := item["key"].(string)
+				mdBytes, _ := item["markdown_bytes"].(float64)
+				maxBytes, _ := item["max_markdown_bytes"].(float64)
+				fmt.Fprintf(out, "    - %s (%.0f KB markdown > %.0f KB limit)\n",
+					key, mdBytes/1024, maxBytes/1024)
+			}
+			if len(items) > 5 {
+				fmt.Fprintf(out, "    ... and %d more\n", len(items)-5)
+			}
+			fmt.Fprintln(out, "    → Split these documents into smaller files, or upgrade your plan to allow larger markdown per document.")
+		case "DOCUMENT_EXISTS":
+			fmt.Fprintf(out, "\n  %d file(s) already exist in the namespace:\n", len(items))
+			for _, item := range items[:limit] {
+				key, _ := item["key"].(string)
+				fmt.Fprintf(out, "    - %s\n", key)
+			}
+			if len(items) > 5 {
+				fmt.Fprintf(out, "    ... and %d more\n", len(items)-5)
+			}
+			fmt.Fprintln(out, "    → Use --overwrite to replace, or delete the existing docs first.")
+		case "INVALID":
+			fmt.Fprintf(out, "\n  %d file(s) rejected as invalid:\n", len(items))
+			for _, item := range items[:limit] {
+				key, _ := item["key"].(string)
+				msg, _ := item["error"].(string)
+				if msg == "" {
+					msg, _ = item["message"].(string)
+				}
+				fmt.Fprintf(out, "    - %s: %s\n", key, msg)
+			}
+		default:
+			fmt.Fprintf(out, "\n  %d file(s) with %s error:\n", len(items), code)
+			for _, item := range items[:limit] {
+				fmt.Fprintf(out, "    - %v\n", item)
+			}
+		}
+	}
 }
 
 // signalCtx retorna um contexto cancelado ao receber SIGINT ou SIGTERM.

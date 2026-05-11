@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -424,6 +425,166 @@ func TestRunUpload_StorageLimit402(t *testing.T) {
 	apiErr, ok := err.(*api.APIError)
 	if !ok || apiErr.Status != 402 {
 		t.Fatalf("esperado APIError 402, obtido %v", err)
+	}
+}
+
+func TestPrintEnqueueErrorsGroupsByCode(t *testing.T) {
+	var buf bytes.Buffer
+	errors := []map[string]any{
+		{"code": "MARKDOWN_TOO_LARGE", "key": "a.md", "markdown_bytes": 500_000.0, "max_markdown_bytes": 200_000.0},
+		{"code": "MARKDOWN_TOO_LARGE", "key": "b.md", "markdown_bytes": 300_000.0, "max_markdown_bytes": 200_000.0},
+		{"code": "DOCUMENT_EXISTS", "key": "c.md"},
+	}
+	printEnqueueErrors(&buf, errors)
+	out := buf.String()
+
+	if !strings.Contains(out, "2 file(s) exceeded") {
+		t.Errorf("esperado grupo MARKDOWN_TOO_LARGE; obtido:\n%s", out)
+	}
+	if !strings.Contains(out, "a.md") || !strings.Contains(out, "b.md") {
+		t.Errorf("esperado arquivos listados; obtido:\n%s", out)
+	}
+	if !strings.Contains(out, "Split these documents") {
+		t.Errorf("esperado sugestão de split; obtido:\n%s", out)
+	}
+	if !strings.Contains(out, "1 file(s) already exist") {
+		t.Errorf("esperado grupo DOCUMENT_EXISTS; obtido:\n%s", out)
+	}
+}
+
+func TestPrintEnqueueErrors_LimitaCincoItens(t *testing.T) {
+	var buf bytes.Buffer
+	erros := make([]map[string]any, 8)
+	for i := range erros {
+		erros[i] = map[string]any{
+			"code":               "MARKDOWN_TOO_LARGE",
+			"key":                fmt.Sprintf("doc-%d.md", i),
+			"markdown_bytes":     500_000.0,
+			"max_markdown_bytes": 200_000.0,
+		}
+	}
+	printEnqueueErrors(&buf, erros)
+	out := buf.String()
+
+	if !strings.Contains(out, "... and 3 more") {
+		t.Errorf("esperado '... and 3 more' para 8 itens; obtido:\n%s", out)
+	}
+}
+
+func TestUploadBatch413ParsesDetailMessage(t *testing.T) {
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		json.NewEncoder(w).Encode(map[string]any{
+			"detail": map[string]any{
+				"code":               "MARKDOWN_TOO_LARGE",
+				"key":               "big.md",
+				"markdown_bytes":    500_000,
+				"max_markdown_bytes": 200_000,
+				"message":           "Document 'big.md' produces 500 KB of markdown text, which exceeds the per-document limit of 200 KB.",
+			},
+		})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+	c := api.New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	c.RetryMin = 1
+	c.RetryMax = 1
+
+	files := []api.UploadFile{{Path: a, UploadKey: "a.md"}}
+	_, err := c.UploadBatch(files, "docs", false)
+	apiErr, ok := err.(*api.APIError)
+	if !ok || apiErr.Status != 413 {
+		t.Fatalf("esperado APIError 413; obtido %v", err)
+	}
+	if !strings.Contains(apiErr.Message, "500 KB") {
+		t.Errorf("esperado mensagem extraída do campo detail; obtido %q", apiErr.Message)
+	}
+}
+
+func TestRunUploadSurfacesEnqueueErrorsInSummary(t *testing.T) {
+	var pollCount int32
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/documents"):
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]any{
+				"task_id": "tid-enqueue-err", "status": "processing", "total": 1, "namespace": "docs",
+			})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tasks/"):
+			atomic.AddInt32(&pollCount, 1)
+			json.NewEncoder(w).Encode(map[string]any{
+				"task_id":   "tid-enqueue-err",
+				"status":    "completed",
+				"total":     1,
+				"succeeded": 0,
+				"failed":    0,
+				"processed": 1,
+				"enqueue_errors": []map[string]any{
+					{
+						"code":               "MARKDOWN_TOO_LARGE",
+						"key":               "big.md",
+						"markdown_bytes":    float64(500_000),
+						"max_markdown_bytes": float64(200_000),
+						"message":           "Document 'big.md' is too large.",
+					},
+				},
+			})
+		default:
+			t.Fatalf("path inesperado: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "big.md")
+	os.WriteFile(a, []byte("# Big"), 0644)
+
+	client := api.New(servidor.URL, "sk-test")
+	client.OrgSlug = "acme"
+	client.RetryMin = 1
+	client.RetryMax = 1
+
+	files := []api.UploadFile{{Path: a, UploadKey: "big.md"}}
+	resp, skipped, err := uploadBatchWithSkip(client, files, "docs", false)
+	if err != nil {
+		t.Fatalf("uploadBatchWithSkip erro inesperado: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("esperado 0 skipped, obtido %d", len(skipped))
+	}
+
+	taskIDs := []string{resp.TaskID}
+	var buf bytes.Buffer
+	oldQuiet := quiet
+	quiet = true
+	defer func() { quiet = oldQuiet }()
+
+	ctx, cancel := signalCtx()
+	defer cancel()
+
+	succeeded, failed, enqueueErrors, status := pollTasks(ctx, client, taskIDs, &buf)
+	if status != pollDone {
+		t.Fatalf("esperado pollDone; obtido %v", status)
+	}
+	if succeeded != 0 || failed != 0 {
+		t.Errorf("esperado succeeded=0 failed=0; obtido succeeded=%d failed=%d", succeeded, failed)
+	}
+	if len(enqueueErrors) != 1 {
+		t.Fatalf("esperado 1 enqueue_error; obtido %d", len(enqueueErrors))
+	}
+
+	printEnqueueErrors(&buf, enqueueErrors)
+	out := buf.String()
+
+	if !strings.Contains(out, "1 file(s) exceeded") {
+		t.Errorf("esperado mensagem de MARKDOWN_TOO_LARGE no sumário; obtido:\n%s", out)
+	}
+	if !strings.Contains(out, "Split these documents") {
+		t.Errorf("esperado sugestão de split; obtido:\n%s", out)
 	}
 }
 
