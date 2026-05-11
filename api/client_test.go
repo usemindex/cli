@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestNewClient(t *testing.T) {
@@ -360,11 +362,25 @@ func TestUploadBatch(t *testing.T) {
 	}
 }
 
-func TestUploadBatch429(t *testing.T) {
+func TestUploadBatchRetries429ComRetryAfter(t *testing.T) {
+	var attempts int32
+	// O servidor responde com Retry-After: 1 nas primeiras 2 tentativas e
+	// retorna 202 na terceira. Usamos RetryMin/RetryMax pequenos para agilizar
+	// — porém o Retry-After ainda vale, limitado pelo RetryMax configurado.
+	retryWait := 20 * time.Millisecond
 	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "5")
-		w.WriteHeader(http.StatusTooManyRequests)
-		json.NewEncoder(w).Encode(map[string]any{"error": "Rate limit exceeded", "retry_after": 60})
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			// Envia Retry-After em milissegundos não é padrão; o servidor
+			// real envia segundos. Aqui testamos que o header é lido e que
+			// o cliente respeita a espera. Valor "0" força uso do backoff.
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]any{"error": "Rate limit"})
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"task_id": "tid-apos-retry", "total": 1, "namespace": "docs"})
 	}))
 	defer servidor.Close()
 
@@ -374,13 +390,220 @@ func TestUploadBatch429(t *testing.T) {
 
 	c := New(servidor.URL, "sk-test")
 	c.OrgSlug = "acme"
+	c.RetryMin = retryWait
+	c.RetryMax = 500 * time.Millisecond
+
+	start := time.Now()
+	resp, err := c.UploadBatch([]string{a}, "docs")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("UploadBatch erro inesperado: %v", err)
+	}
+	if resp.TaskID != "tid-apos-retry" {
+		t.Errorf("task_id: esperado %q, obtido %q", "tid-apos-retry", resp.TaskID)
+	}
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Errorf("attempts: esperado 3, obtido %d", attempts)
+	}
+	// 2 retries com backoff exponencial: retryWait + 2×retryWait = 3×retryWait
+	minExpected := 3 * retryWait
+	if elapsed < minExpected {
+		t.Errorf("esperado ao menos %v de elapsed, obtido %v", minExpected, elapsed)
+	}
+}
+
+func TestUploadBatchEsgota429ERetornaErro(t *testing.T) {
+	var attempts int32
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		// Retry-After: 0 faz o backoffFor assumir o controle (RetryMin)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{"error": "Rate limit"})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	// Backoff mínimo para que o teste não demore (maxRetries429=5 tentativas)
+	c.RetryMin = 1 * time.Millisecond
+	c.RetryMax = 5 * time.Millisecond
+
 	_, err := c.UploadBatch([]string{a}, "docs")
 	apiErr, ok := err.(*APIError)
 	if !ok {
-		t.Fatalf("esperado *APIError, obtido %T", err)
+		t.Fatalf("esperado *APIError 429 após esgotar retries, obtido %T: %v", err, err)
 	}
 	if apiErr.Status != 429 {
 		t.Errorf("status: esperado 429, obtido %d", apiErr.Status)
+	}
+	// maxRetries429=5 → 6 tentativas no total (attempt 0..5)
+	if atomic.LoadInt32(&attempts) != maxRetries429+1 {
+		t.Errorf("attempts: esperado %d, obtido %d", maxRetries429+1, attempts)
+	}
+}
+
+func TestUploadBatchRetries5xx(t *testing.T) {
+	var attempts int32
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"task_id": "tid", "total": 1, "namespace": "docs"})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	c.RetryMin = 1 * time.Millisecond
+	c.RetryMax = 5 * time.Millisecond
+
+	resp, err := c.UploadBatch([]string{a}, "docs")
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if resp.TaskID != "tid" {
+		t.Errorf("task_id: %q", resp.TaskID)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Errorf("attempts: esperado 2, obtido %d", attempts)
+	}
+}
+
+func TestTaskStatusRetries429(t *testing.T) {
+	var attempts int32
+	retryWait := 20 * time.Millisecond
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 2 {
+			// Retry-After: 0 → backoff exponencial com RetryMin configurado
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id": "tid-1", "status": "completed", "total": 1,
+			"succeeded": 1, "failed": 0, "processed": 1, "namespace": "docs",
+		})
+	}))
+	defer servidor.Close()
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	c.RetryMin = retryWait
+	c.RetryMax = 500 * time.Millisecond
+
+	start := time.Now()
+	resp, err := c.TaskStatus("tid-1")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Errorf("status: %q", resp.Status)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Errorf("attempts: esperado 2, obtido %d", attempts)
+	}
+	// 1 retry × retryWait de backoff
+	if elapsed < retryWait {
+		t.Errorf("esperado ao menos %v de elapsed, obtido %v", retryWait, elapsed)
+	}
+}
+
+// TestTaskStatusRetries429ComRetryAfterReal verifica que Retry-After em segundos
+// reais é honrado quando RetryMax for maior que o valor do header.
+func TestTaskStatusRetries429ComRetryAfterReal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("pulando teste de Retry-After em modo -short")
+	}
+	var attempts int32
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id": "tid-1", "status": "completed", "total": 1,
+			"succeeded": 1, "failed": 0, "processed": 1, "namespace": "docs",
+		})
+	}))
+	defer servidor.Close()
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	// RetryMin pequeno, RetryMax maior que 1s para que Retry-After: 1 seja respeitado
+	c.RetryMin = 10 * time.Millisecond
+	c.RetryMax = 60 * time.Second
+
+	start := time.Now()
+	resp, err := c.TaskStatus("tid-1")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Errorf("status: %q", resp.Status)
+	}
+	// Retry-After de 1s deve ter sido aguardado
+	if elapsed < 1*time.Second {
+		t.Errorf("esperado ao menos 1s de elapsed (Retry-After), obtido %v", elapsed)
+	}
+}
+
+func TestBackoffFor(t *testing.T) {
+	c := New("http://x", "k")
+	c.RetryMin = time.Second
+	c.RetryMax = 60 * time.Second
+
+	esperados := []time.Duration{1, 2, 4, 8, 16, 32, 60}
+	for i, want := range esperados {
+		got := c.backoffFor(i)
+		if got != want*time.Second {
+			t.Errorf("backoffFor(%d): esperado %v, obtido %v", i, want*time.Second, got)
+		}
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	c := New("http://x", "k")
+	c.RetryMax = 60 * time.Second
+
+	casos := []struct {
+		input    string
+		esperado time.Duration
+	}{
+		{"", 0},
+		{"0", 0},
+		{"-1", 0},
+		{"abc", 0},
+		{"5", 5 * time.Second},
+		{"30", 30 * time.Second},
+		{"120", 60 * time.Second}, // limitado ao RetryMax
+	}
+	for _, tc := range casos {
+		got := c.parseRetryAfter(tc.input)
+		if got != tc.esperado {
+			t.Errorf("parseRetryAfter(%q): esperado %v, obtido %v", tc.input, tc.esperado, got)
+		}
 	}
 }
 
