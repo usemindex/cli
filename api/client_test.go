@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -326,6 +327,22 @@ func TestUploadBatch(t *testing.T) {
 		if r.FormValue("namespace") != "docs" {
 			t.Fatalf("namespace esperado 'docs', obtido %q", r.FormValue("namespace"))
 		}
+		// overwrite não deve estar presente quando não solicitado
+		if r.FormValue("overwrite") != "" {
+			t.Fatalf("overwrite não esperado, obtido %q", r.FormValue("overwrite"))
+		}
+
+		// keys[] deve estar presente e corresponder aos UploadKeys enviados
+		keys := r.MultipartForm.Value["keys[]"]
+		if len(keys) != 2 {
+			t.Fatalf("esperado 2 keys[] values, obtido %d", len(keys))
+		}
+		expectedKeys := []string{"a.md", "b.md"}
+		for i, k := range keys {
+			if k != expectedKeys[i] {
+				t.Errorf("keys[%d]: esperado %q, obtido %q", i, expectedKeys[i], k)
+			}
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -350,7 +367,10 @@ func TestUploadBatch(t *testing.T) {
 
 	c := New(servidor.URL, "sk-test")
 	c.OrgSlug = "acme"
-	resp, err := c.UploadBatch([]string{a, b}, "docs")
+	resp, err := c.UploadBatch([]UploadFile{
+		{Path: a, UploadKey: "a.md"},
+		{Path: b, UploadKey: "b.md"},
+	}, "docs", false)
 	if err != nil {
 		t.Fatalf("UploadBatch erro inesperado: %v", err)
 	}
@@ -359,6 +379,89 @@ func TestUploadBatch(t *testing.T) {
 	}
 	if resp.Total != 2 {
 		t.Errorf("total: esperado 2, obtido %d", resp.Total)
+	}
+}
+
+func TestUploadBatchPreservaSubpath(t *testing.T) {
+	// Verifica que o UploadKey (subpath) é enviado como filename no Content-Disposition
+	// do multipart — evitando colisões entre arquivos de mesmo basename em diretórios distintos.
+	//
+	// Nota: o Go http.Server (net/http) segue RFC 2183 e strips o diretório do
+	// FileHeader.Filename por segurança. Por isso lemos o corpo raw do request
+	// para confirmar que os subpaths chegam ao servidor sem truncagem pelo cliente.
+	var rawBody []byte
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		rawBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("leitura do body: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id": "tid-sub", "status": "processing", "total": 2, "namespace": "docs",
+		})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	// Cria dois arquivos com mesmo basename em subdiretórios distintos.
+	dirA := filepath.Join(tmp, "payments")
+	dirB := filepath.Join(tmp, "subscriptions")
+	os.MkdirAll(dirA, 0755)
+	os.MkdirAll(dirB, 0755)
+	fileA := filepath.Join(dirA, "introduction.md")
+	fileB := filepath.Join(dirB, "introduction.md")
+	os.WriteFile(fileA, []byte("# payments"), 0644)
+	os.WriteFile(fileB, []byte("# subscriptions"), 0644)
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	_, err := c.UploadBatch([]UploadFile{
+		{Path: fileA, UploadKey: "payments/introduction.md"},
+		{Path: fileB, UploadKey: "subscriptions/introduction.md"},
+	}, "docs", false)
+	if err != nil {
+		t.Fatalf("UploadBatch erro inesperado: %v", err)
+	}
+
+	// Verifica que o body bruto contém os subpaths nos headers Content-Disposition.
+	// O Go mime/multipart serializa: filename="payments/introduction.md"
+	body := string(rawBody)
+	for _, want := range []string{`payments/introduction.md`, `subscriptions/introduction.md`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body multipart não contém o subpath %q", want)
+		}
+	}
+}
+
+func TestUploadBatchOverwrite(t *testing.T) {
+	// Verifica que o campo "overwrite=true" é enviado quando a flag está ativa.
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("erro parsing multipart: %v", err)
+		}
+		if got := r.FormValue("overwrite"); got != "true" {
+			t.Errorf("overwrite: esperado 'true', obtido %q", got)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"task_id": "tid-ow", "status": "processing", "total": 1, "namespace": "docs",
+		})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	resp, err := c.UploadBatch([]UploadFile{{Path: a, UploadKey: "a.md"}}, "docs", true)
+	if err != nil {
+		t.Fatalf("UploadBatch erro inesperado: %v", err)
+	}
+	if resp.TaskID != "tid-ow" {
+		t.Errorf("task_id: esperado %q, obtido %q", "tid-ow", resp.TaskID)
 	}
 }
 
@@ -394,7 +497,7 @@ func TestUploadBatchRetries429ComRetryAfter(t *testing.T) {
 	c.RetryMax = 500 * time.Millisecond
 
 	start := time.Now()
-	resp, err := c.UploadBatch([]string{a}, "docs")
+	resp, err := c.UploadBatch([]UploadFile{{Path: a, UploadKey: "a.md"}}, "docs", false)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -434,7 +537,7 @@ func TestUploadBatchEsgota429ERetornaErro(t *testing.T) {
 	c.RetryMin = 1 * time.Millisecond
 	c.RetryMax = 5 * time.Millisecond
 
-	_, err := c.UploadBatch([]string{a}, "docs")
+	_, err := c.UploadBatch([]UploadFile{{Path: a, UploadKey: "a.md"}}, "docs", false)
 	apiErr, ok := err.(*APIError)
 	if !ok {
 		t.Fatalf("esperado *APIError 429 após esgotar retries, obtido %T: %v", err, err)
@@ -470,7 +573,7 @@ func TestUploadBatchRetries5xx(t *testing.T) {
 	c.RetryMin = 1 * time.Millisecond
 	c.RetryMax = 5 * time.Millisecond
 
-	resp, err := c.UploadBatch([]string{a}, "docs")
+	resp, err := c.UploadBatch([]UploadFile{{Path: a, UploadKey: "a.md"}}, "docs", false)
 	if err != nil {
 		t.Fatalf("erro inesperado: %v", err)
 	}
@@ -637,6 +740,45 @@ func TestTaskStatus(t *testing.T) {
 	}
 	if resp.Succeeded != 2 {
 		t.Errorf("succeeded: esperado 2, obtido %d", resp.Succeeded)
+	}
+}
+
+func TestUploadBatchSendsSubpathInKeys(t *testing.T) {
+	// Verifica que keys[] recebidos pelo servidor preservam o subpath completo
+	// (ex: "payments/intro.md"), independente do que o Rack faz com o filename
+	// do multipart (que seria truncado para "intro.md" por segurança).
+	var receivedKeys []string
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatal(err)
+		}
+		receivedKeys = r.MultipartForm.Value["keys[]"]
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"task_id": "tid", "total": 2, "namespace": "docs"})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	b := filepath.Join(tmp, "b.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+	os.WriteFile(b, []byte("# B"), 0644)
+
+	files := []UploadFile{
+		{Path: a, UploadKey: "payments/intro.md"},
+		{Path: b, UploadKey: "subscriptions/intro.md"},
+	}
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	_, err := c.UploadBatch(files, "docs", false)
+	if err != nil {
+		t.Fatalf("UploadBatch erro: %v", err)
+	}
+	if len(receivedKeys) != 2 {
+		t.Fatalf("esperado 2 keys, obtido %d", len(receivedKeys))
+	}
+	if receivedKeys[0] != "payments/intro.md" || receivedKeys[1] != "subscriptions/intro.md" {
+		t.Errorf("keys recebidos: %v", receivedKeys)
 	}
 }
 
