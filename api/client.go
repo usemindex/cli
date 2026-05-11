@@ -10,8 +10,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	maxRetries429 = 5
+	maxRetries5xx = 3
+)
+
+var (
+	defaultRetryMin = 1 * time.Second
+	defaultRetryMax = 60 * time.Second
 )
 
 // APIError representa um erro retornado pela API com código HTTP e mensagem.
@@ -44,6 +55,10 @@ type Client struct {
 	APIKey     string
 	OrgSlug    string
 	HTTPClient *http.Client
+	// RetryMin e RetryMax controlam o backoff exponencial para retries.
+	// Exportados para que testes possam sobrescrever com valores menores.
+	RetryMin time.Duration
+	RetryMax time.Duration
 }
 
 // New cria um novo Client com timeout padrão de 30 segundos.
@@ -54,7 +69,87 @@ func New(baseURL, apiKey string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		RetryMin: defaultRetryMin,
+		RetryMax: defaultRetryMax,
 	}
+}
+
+// backoffFor retorna a duração de backoff exponencial para a tentativa N.
+// Sequência: RetryMin, 2×RetryMin, 4×RetryMin, ... limitado a RetryMax.
+func (c *Client) backoffFor(attempt int) time.Duration {
+	d := c.RetryMin * time.Duration(1<<uint(attempt))
+	if d > c.RetryMax {
+		d = c.RetryMax
+	}
+	return d
+}
+
+// parseRetryAfter lê o valor do header Retry-After (em segundos) e retorna
+// como Duration. Retorna 0 se ausente, inválido ou não-positivo.
+func (c *Client) parseRetryAfter(v string) time.Duration {
+	if v == "" {
+		return 0
+	}
+	secs, err := strconv.Atoi(v)
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	d := time.Duration(secs) * time.Second
+	if d > c.RetryMax {
+		d = c.RetryMax
+	}
+	return d
+}
+
+// doWithRetry executa uma requisição HTTP com retry automático em 429 e 5xx.
+// Em 429, respeita o header Retry-After (segundos); cai em backoff exponencial
+// se ausente. Em 5xx e erros de transporte, usa backoff exponencial.
+// Retorna a resposta final, o corpo em bytes ou um erro se os retries se esgotarem.
+func (c *Client) doWithRetry(reqFactory func() (*http.Request, error)) (*http.Response, []byte, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries429; attempt++ {
+		req, err := reqFactory()
+		if err != nil {
+			return nil, nil, err
+		}
+		resp, err := c.HTTPClient.Do(req)
+		if err != nil {
+			// erro de transporte — retry limitado a maxRetries5xx
+			if attempt >= maxRetries5xx {
+				return nil, nil, err
+			}
+			lastErr = err
+			time.Sleep(c.backoffFor(attempt))
+			continue
+		}
+		body, bodyErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if bodyErr != nil {
+			return resp, nil, bodyErr
+		}
+
+		// Retry em 429 (rate limit)
+		if resp.StatusCode == 429 && attempt < maxRetries429 {
+			wait := c.parseRetryAfter(resp.Header.Get("Retry-After"))
+			if wait == 0 {
+				wait = c.backoffFor(attempt)
+			}
+			time.Sleep(wait)
+			continue
+		}
+
+		// Retry em 5xx (erro de servidor), mas não em 4xx exceto 429
+		if resp.StatusCode >= 500 && attempt < maxRetries5xx {
+			time.Sleep(c.backoffFor(attempt))
+			continue
+		}
+
+		return resp, body, nil
+	}
+	if lastErr != nil {
+		return nil, nil, lastErr
+	}
+	return nil, nil, fmt.Errorf("retries esgotados")
 }
 
 // do executa uma requisição HTTP com autenticação e deserializa a resposta JSON.
@@ -129,7 +224,7 @@ func (c *Client) Search(query, namespace string, limit int) (map[string]any, err
 // Context recupera contexto GraphRAG para uma pergunta.
 func (c *Client) Context(question, namespace string) (map[string]any, error) {
 	payload := map[string]any{
-		"question":  question,
+		"question": question,
 	}
 	if namespace != "" {
 		payload["namespace"] = namespace
@@ -258,53 +353,53 @@ type TaskStatusResponse struct {
 
 // UploadBatch faz upload de múltiplos arquivos numa única request multipart.
 // O servidor (API Rails) aceita até 50 arquivos por request.
+// Em caso de 429 ou 5xx, retenta automaticamente com backoff.
 func (c *Client) UploadBatch(filePaths []string, namespace string) (*BatchResponse, error) {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+	// reqFactory reconstrói o multipart body a cada tentativa, pois o body é
+	// consumido na request anterior e não pode ser reutilizado diretamente.
+	reqFactory := func() (*http.Request, error) {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
 
-	for _, fp := range filePaths {
-		f, err := os.Open(fp)
-		if err != nil {
-			return nil, fmt.Errorf("erro ao abrir %s: %w", fp, err)
-		}
-		// Rails convention: name "files[]" → params[:files] array
-		part, err := writer.CreateFormFile("files[]", filepath.Base(fp))
-		if err != nil {
+		for _, fp := range filePaths {
+			f, err := os.Open(fp)
+			if err != nil {
+				return nil, fmt.Errorf("erro ao abrir %s: %w", fp, err)
+			}
+			// Rails convention: name "files[]" → params[:files] array
+			part, err := writer.CreateFormFile("files[]", filepath.Base(fp))
+			if err != nil {
+				f.Close()
+				return nil, fmt.Errorf("erro ao criar form file: %w", err)
+			}
+			if _, err := io.Copy(part, f); err != nil {
+				f.Close()
+				return nil, fmt.Errorf("erro ao copiar %s: %w", fp, err)
+			}
 			f.Close()
-			return nil, fmt.Errorf("erro ao criar form file: %w", err)
 		}
-		if _, err := io.Copy(part, f); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("erro ao copiar %s: %w", fp, err)
+		if namespace != "" {
+			writer.WriteField("namespace", namespace)
 		}
-		f.Close()
-	}
-	if namespace != "" {
-		writer.WriteField("namespace", namespace)
-	}
-	writer.Close()
+		writer.Close()
 
-	req, err := http.NewRequest(
-		http.MethodPost,
-		fmt.Sprintf("%s/api/v1/%s/documents", c.BaseURL, c.OrgSlug),
-		&buf,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+		req, err := http.NewRequest(
+			http.MethodPost,
+			fmt.Sprintf("%s/api/v1/%s/documents", c.BaseURL, c.OrgSlug),
+			&buf,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("Accept", "application/json")
+		return req, nil
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, respBody, err := c.doWithRetry(reqFactory)
 	if err != nil {
 		return nil, fmt.Errorf("erro na requisição: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao ler resposta: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
@@ -325,24 +420,22 @@ func (c *Client) UploadBatch(filePaths []string, namespace string) (*BatchRespon
 }
 
 // TaskStatus consulta o status agregado de um batch de upload.
+// Em caso de 429 ou 5xx, retenta automaticamente com backoff.
 func (c *Client) TaskStatus(taskID string) (*TaskStatusResponse, error) {
-	path := fmt.Sprintf("/api/v1/%s/documents/tasks/%s", c.OrgSlug, url.PathEscape(taskID))
-	req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+	reqFactory := func() (*http.Request, error) {
+		path := fmt.Sprintf("/api/v1/%s/documents/tasks/%s", c.OrgSlug, url.PathEscape(taskID))
+		req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, respBody, err := c.doWithRetry(reqFactory)
 	if err != nil {
 		return nil, fmt.Errorf("erro na requisição: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao ler resposta: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
