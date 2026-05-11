@@ -391,6 +391,13 @@ func (c *Client) UploadBatch(files []UploadFile, namespace string, overwrite boo
 				return nil, fmt.Errorf("erro ao copiar %s: %w", uf.Path, err)
 			}
 			f.Close()
+
+			// Envia a chave de upload como campo paralelo keys[] — o Rack strips
+			// barras do filename do multipart por segurança, então a API Rails usa
+			// keys[] como fonte autoritativa do document key (com subpath preservado).
+			if err := writer.WriteField("keys[]", uf.UploadKey); err != nil {
+				return nil, fmt.Errorf("erro ao escrever keys[] field: %w", err)
+			}
 		}
 		if namespace != "" {
 			writer.WriteField("namespace", namespace)

@@ -332,6 +332,18 @@ func TestUploadBatch(t *testing.T) {
 			t.Fatalf("overwrite não esperado, obtido %q", r.FormValue("overwrite"))
 		}
 
+		// keys[] deve estar presente e corresponder aos UploadKeys enviados
+		keys := r.MultipartForm.Value["keys[]"]
+		if len(keys) != 2 {
+			t.Fatalf("esperado 2 keys[] values, obtido %d", len(keys))
+		}
+		expectedKeys := []string{"a.md", "b.md"}
+		for i, k := range keys {
+			if k != expectedKeys[i] {
+				t.Errorf("keys[%d]: esperado %q, obtido %q", i, expectedKeys[i], k)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(map[string]any{
@@ -728,6 +740,45 @@ func TestTaskStatus(t *testing.T) {
 	}
 	if resp.Succeeded != 2 {
 		t.Errorf("succeeded: esperado 2, obtido %d", resp.Succeeded)
+	}
+}
+
+func TestUploadBatchSendsSubpathInKeys(t *testing.T) {
+	// Verifica que keys[] recebidos pelo servidor preservam o subpath completo
+	// (ex: "payments/intro.md"), independente do que o Rack faz com o filename
+	// do multipart (que seria truncado para "intro.md" por segurança).
+	var receivedKeys []string
+	servidor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatal(err)
+		}
+		receivedKeys = r.MultipartForm.Value["keys[]"]
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"task_id": "tid", "total": 2, "namespace": "docs"})
+	}))
+	defer servidor.Close()
+
+	tmp := t.TempDir()
+	a := filepath.Join(tmp, "a.md")
+	b := filepath.Join(tmp, "b.md")
+	os.WriteFile(a, []byte("# A"), 0644)
+	os.WriteFile(b, []byte("# B"), 0644)
+
+	files := []UploadFile{
+		{Path: a, UploadKey: "payments/intro.md"},
+		{Path: b, UploadKey: "subscriptions/intro.md"},
+	}
+	c := New(servidor.URL, "sk-test")
+	c.OrgSlug = "acme"
+	_, err := c.UploadBatch(files, "docs", false)
+	if err != nil {
+		t.Fatalf("UploadBatch erro: %v", err)
+	}
+	if len(receivedKeys) != 2 {
+		t.Fatalf("esperado 2 keys, obtido %d", len(receivedKeys))
+	}
+	if receivedKeys[0] != "payments/intro.md" || receivedKeys[1] != "subscriptions/intro.md" {
+		t.Errorf("keys recebidos: %v", receivedKeys)
 	}
 }
 
