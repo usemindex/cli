@@ -160,13 +160,13 @@ If a single file fails validation (unsupported type, exceeds 10 MB, invalid enco
 
 Press `Ctrl+C` while files are processing — uploads continue in the background; you can re-poll later with `mindex status <task_id>`.
 
-See [Plan limits](#plan-limits) for the full breakdown of per-plan document count and per-file markdown caps.
+See [Plan limits](#plan-limits) for the full breakdown of per-plan document count and per-file text size limits.
 
 ## Plan limits
 
 Mindex enforces two independent size limits on every upload:
 
-| Plan | Max documents | Max markdown per document | Max raw file |
+| Plan | Max documents | Max text per document | Max raw file |
 |------|---------------|---------------------------|--------------|
 | Free | 100 | 30 KB | 10 MB |
 | Personal | 5,000 | 150 KB | 10 MB |
@@ -177,19 +177,19 @@ For Enterprise plans, all limits are negotiated individually — [contact us](ma
 
 ### Why two size limits?
 
-We convert every file (PDF, DOCX, etc.) to markdown before processing. The **raw** file size protects against catastrophic uploads. The **markdown** size — the actual cost driver — is what the plan limits. A 5 MB PDF might produce only 100 KB of markdown text; a 5 MB plain `.md` file is 5 MB of markdown.
+We convert every file (PDF, DOCX, etc.) to markdown before processing. The **raw** file size protects against catastrophic uploads. The **text size** — the actual cost driver — is what the plan limits. A 5 MB PDF might produce only 100 KB of text; a 5 MB plain `.md` file is 5 MB of text.
 
-If you're hitting the markdown cap with `.md` uploads, consider splitting documents into smaller logical units (chapters, sections).
+If you're hitting the text size limit with `.md` uploads, consider splitting documents into smaller logical units (chapters, sections).
 
 ## Errors you might see
 
 | Error | What it means | What to do |
 |-------|---------------|------------|
-| `MARKDOWN_TOO_LARGE` | A document's converted markdown exceeds your plan's per-doc limit | Split the doc into smaller files, or upgrade your plan |
+| `MARKDOWN_TOO_LARGE` | A document's converted text exceeds your plan's per-doc limit | Split the doc into smaller files, or upgrade your plan |
 | `DOCUMENT_EXISTS` | A doc with the same key already exists in this namespace | Use `--overwrite` to replace, or upload to a different namespace |
 | `402 Document limit reached` | You hit your plan's document count cap | Delete some docs or upgrade |
 | `429 Rate limited` | Per-minute request cap hit | The CLI retries automatically — just wait |
-| `413 Payload too large` | Single-file upload exceeded plan markdown limit | Split or upgrade |
+| `413 Payload too large` | Single-file upload exceeded the plan's text size limit | Split or upgrade |
 
 When a batch contains some failing files, the CLI continues with the rest and shows a grouped summary at the end. No need to re-run the whole upload.
 
