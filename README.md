@@ -170,7 +170,7 @@ Mindex enforces two independent size limits on every upload:
 |------|---------------|---------------------------|--------------|
 | Free | 100 | 30 KB | 10 MB |
 | Personal | 5,000 | 150 KB | 10 MB |
-| Team | 15,000 | 300 KB | 10 MB |
+| Team | 20,000 | 1 MB | 10 MB |
 | Enterprise | Tailored | Tailored | 10 MB |
 
 For Enterprise plans, all limits are negotiated individually — [contact us](mailto:support@usemindex.dev).
